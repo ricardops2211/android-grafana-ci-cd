@@ -1,1 +1,71 @@
+name: Reusable - Android Emulator Test (Self-Hosted)
 
+on:
+  workflow_call:
+    inputs:
+      java_version: { type: string, default: '17' }
+      avd_name:     { type: string, default: 'ciPixel6' }
+      gpu_mode:     { type: string, default: 'swiftshader_indirect' }
+    outputs:
+      tests_pass_ratio: { value: ${{ jobs.emu.outputs.tests_pass_ratio }} }
+      startup_ms:       { value: ${{ jobs.emu.outputs.startup_ms }} }
+
+jobs:
+  emu:
+
+    runs-on: self-hosted
+    outputs:
+      tests_pass_ratio: ${{ steps.ratio.outputs.ratio }}
+      startup_ms:       ${{ steps.derive.outputs.STARTUP_MS }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with: { distribution: temurin, java-version: ${{ inputs.java_version }} }
+      - uses: gradle/actions/setup-gradle@v3
+
+      - run: ./gradlew --no-daemon clean test assembleDebug
+
+      - name: Boot emulator (Xvfb)
+        run: |
+          pgrep Xvfb || (Xvfb :0 -screen 0 1600x900x24 >/dev/null 2>&1 &)
+          echo "DISPLAY=:0" >> $GITHUB_ENV
+          emulator -avd "${{ inputs.avd_name }}" -no-boot-anim -noaudio -gpu ${{ inputs.gpu_mode }} -qemu -m 4096 >/dev/null 2>&1 &
+          adb wait-for-device
+          for _ in {1..60}; do [ "$(adb shell getprop sys.boot_completed 2>/dev/null | tr -d '\r')" = "1" ] && break; sleep 2; done
+          adb shell settings put global window_animation_scale 0
+          adb shell settings put global transition_animation_scale 0
+          adb shell settings put global animator_duration_scale 0
+
+      - name: Instrumentation tests
+        run: ./gradlew --no-daemon connectedDebugAndroidTest
+
+      - name: Collect logcat JSON metrics (host path Promtail)
+        run: |
+          HOST_LOG_DIR="/home/gha-runner/obs/ci-logs"
+          mkdir -p "$HOST_LOG_DIR"
+          adb logcat -d | grep METRIC_JSON > "$HOST_LOG_DIR/logcat.jsonl" || true
+          mkdir -p ci/logs && cp -f "$HOST_LOG_DIR/logcat.jsonl" ci/logs/logcat.jsonl 2>/dev/null || true
+          echo "Host log: $HOST_LOG_DIR/logcat.jsonl"; wc -l "$HOST_LOG_DIR/logcat.jsonl" || true
+
+      - id: derive
+        run: |
+          STARTUP=$(jq -r 'select(.metric=="app_startup_ms") | .value' ci/logs/logcat.jsonl | head -n1)
+          [ -z "$STARTUP" ] && STARTUP=0
+          echo "STARTUP_MS=$STARTUP" >> $GITHUB_OUTPUT
+
+      - id: ratio
+        shell: bash
+        run: |
+          TOTAL=$(grep -R "<testsuite" app/build/outputs/androidTest-results/connected/* 2>/dev/null | awk -F'"' '{for(i=1;i<=NF;i++){if($i==" tests="){print $(i+1)}}}' | paste -sd+ - | bc || echo 1)
+          FAIL=$(grep -R "<testsuite" app/build/outputs/androidTest-results/connected/* 2>/dev/null | awk -F'"' '{for(i=1;i<=NF;i++){if($i==" failures="){print $(i+1)}}}' | paste -sd+ - | bc || echo 0)
+          OK=$((TOTAL-FAIL)); export TOTAL OK
+          RATIO=$(python3 ci/compute_pass_ratio.py)
+          echo "ratio=${RATIO}" >> $GITHUB_OUTPUT
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: reports-and-logs
+          path: |
+            app/build/reports
+            app/build/outputs/androidTest-results
+            ci/logs/logcat.jsonl

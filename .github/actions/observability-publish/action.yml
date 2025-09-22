@@ -1,0 +1,39 @@
+name: "Observability Publish"
+description: "Push metrics to Pushgateway and annotate Grafana"
+inputs:
+  pushgateway_url: { required: true }
+  grafana_url:     { required: false, default: "" }
+  startup_ms:      { required: false, default: "0" }
+  pass_ratio:      { required: false, default: "0" }
+  missed_frames:   { required: false, default: "0" }
+  login_ok:        { required: false, default: "0" }
+  login_fail:      { required: false, default: "0" }
+  grafana_api_key: { required: false, default: "" }
+runs:
+  using: "composite"
+  steps:
+    - shell: bash
+      run: |
+        JOB="android_ci_run"; INSTANCE="${GITHUB_RUN_ID:-local}"; SHA="${GITHUB_SHA:-dev}"
+        cat <<EOF | curl -s --data-binary @- "${{ inputs.pushgateway_url }}/metrics/job/${JOB}/instance/${INSTANCE}"
+        # TYPE app_startup_ms gauge
+        app_startup_ms{commit="${SHA}"} ${{ inputs.startup_ms }}
+        # TYPE tests_pass_ratio gauge
+        tests_pass_ratio{commit="${SHA}"} ${{ inputs.pass_ratio }}
+        # TYPE render_missed_frames_total counter
+        render_missed_frames_total{commit="${SHA}"} ${{ inputs.missed_frames }}
+        # TYPE login_success_total counter
+        login_success_total{commit="${SHA}"} ${{ inputs.login_ok }}
+        # TYPE login_failure_total counter
+        login_failure_total{commit="${SHA}"} ${{ inputs.login_fail }}
+        EOF
+        echo "✅ metrics pushed"
+    - if: ${{ inputs.grafana_url != '' && inputs.grafana_api_key != '' }}
+      shell: bash
+      run: |
+        ts=$(date +%s%3N)
+        curl -s -X POST "${{ inputs.grafana_url }}/api/annotations" \
+          -H "Authorization: Bearer ${{ inputs.grafana_api_key }}" \
+          -H "Content-Type: application/json" \
+          -d "{\"time\": ${ts}, \"text\": \"Android CI run: ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}\", \"tags\": [\"android\",\"ci\"]}" >/dev/null \
+          && echo "🟢 grafana annotation ok" || echo "⚠️ grafana annotation failed"
