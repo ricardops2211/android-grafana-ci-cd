@@ -1,1 +1,18 @@
+name: Hola Mundo Workflow
+
+on:
+  push:
+    branches:
+      - main
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v2
+
+      - name: Echo Hola Mundo
+        run: echo "Hola Mundo"
 
