@@ -1,7 +1,8 @@
 name: Android CI E2E (Cloud)
 
 on:
-  push: { branches: [ "main" ] }
+  push:
+    branches: [ "main" ]
   workflow_dispatch:
 
 env:
@@ -12,10 +13,9 @@ jobs:
   tests:
     uses: ./.github/workflows/reusable_android_emulator_test.yml
 
-
   publish:
     needs: tests
-    runs-on: self-hosted     # usa tu VM para hablar con http://localhost:9091
+    runs-on: self-hosted
     steps:
       - uses: actions/checkout@v4
       - name: Publish to observability
@@ -35,9 +35,10 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Enforce SLOs
+        shell: bash
         run: |
-          STARTUP=${{ needs.tests.outputs.startup_ms || 0 }}
-          RATIO=${{ needs.tests.outputs.tests_pass_ratio || 0 }}
+          STARTUP="${{ needs.tests.outputs.startup_ms || 0 }}"
+          RATIO="${{ needs.tests.outputs.tests_pass_ratio || 0 }}"
           echo "Startup: ${STARTUP} ms | Pass ratio: ${RATIO}"
           if [ "$STARTUP" -gt 2500 ]; then echo "❌ Startup > 2500ms"; exit 1; fi
           awk -v r="$RATIO" 'BEGIN{ if (r+0 < 0.9) { print "❌ Pass ratio < 0.9"; exit 1 } }'
