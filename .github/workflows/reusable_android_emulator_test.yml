@@ -27,6 +27,28 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # 👇 AQUI va tu bloque: asegura el wrapper y CRLF
+      - name: Ensure Gradle wrapper is executable (and fix CRLF)
+        shell: bash
+        run: |
+          # Si tu proyecto NO está en la raíz, descomenta y ajusta:
+          # cd android
+
+          # Normaliza finales de línea y da permisos
+          if [ -f gradlew ]; then sed -i 's/\r$//' gradlew; chmod +x gradlew; fi
+          find gradle -type f -name "*.properties" -exec sed -i 's/\r$//' {} + 2>/dev/null || true
+
+          # Si NO existe gradlew, intenta generarlo
+          if [ ! -f gradlew ]; then
+            echo "gradlew not found; trying to generate wrapper..."
+            # setup-gradle más abajo expondrá 'gradle', pero por si acaso:
+            (command -v gradle >/dev/null && gradle wrapper --gradle-version 8.8) || true
+            [ -f gradlew ] && chmod +x gradlew || true
+          fi
+
+          # Marca en el index (no falla si no es repo limpio)
+          git update-index --chmod=+x gradlew || true
+
       - uses: actions/setup-java@v4
         with:
           distribution: temurin
@@ -35,7 +57,10 @@ jobs:
       - uses: gradle/actions/setup-gradle@v3
 
       - name: Build (unit tests + apk)
-        run: ./gradlew --no-daemon clean test assembleDebug
+        shell: bash
+        run: |
+          # Si tu proyecto está en subcarpeta, reemplaza por: cd <ruta>
+          ./gradlew --no-daemon clean test assembleDebug
 
       - name: Boot emulator (headless)
         shell: bash
@@ -51,6 +76,7 @@ jobs:
           done
 
       - name: Instrumentation tests
+        shell: bash
         run: ./gradlew --no-daemon connectedDebugAndroidTest
 
       - name: Collect logcat JSON metrics (host path Promtail)
