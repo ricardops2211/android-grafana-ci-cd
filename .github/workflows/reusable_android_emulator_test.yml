@@ -12,7 +12,7 @@ on:
       gpu_mode:
         type: string
         default: 'swiftshader_indirect'
-      project_dir:          # 👈 por si tu Android vive en subcarpeta (ej: "android")
+      project_dir:
         type: string
         default: '.'
     outputs:
@@ -24,43 +24,36 @@ on:
 jobs:
   emu:
     runs-on: self-hosted
-    defaults:
-      run:
-        shell: bash
-        working-directory: ${{ inputs.project_dir }}
     outputs:
       tests_pass_ratio: ${{ steps.ratio.outputs.ratio }}
       startup_ms: ${{ steps.derive.outputs.STARTUP_MS }}
     steps:
       - uses: actions/checkout@v4
 
-      - name: Debug: show tree
+      - name: Show tree (debug)
         run: |
-          echo "Project dir: $PWD"
-          ls -la || true
+          echo "Project dir: ${{ inputs.project_dir }}"
+          ls -la "${{ inputs.project_dir }}" || true
 
-      # 1) JDK
       - uses: actions/setup-java@v4
         with:
           distribution: temurin
           java-version: ${{ inputs.java_version }}
 
-      # 2) FORZAR wrapper limpio SIEMPRE (borra lo que haya y crea uno nuevo)
+      # Fuerza wrapper limpio SIEMPRE (evita wrappers rotos)
       - name: Force fresh Gradle wrapper (8.8)
         run: |
-          # elimina wrappers/caches potencialmente corruptos
+          cd "${{ inputs.project_dir }}"
           rm -f   gradlew gradlew.bat || true
           rm -rf  gradle/wrapper      || true
-          # descarga gradle binario temporal y genera wrapper
           TMP="$RUNNER_TEMP/gradle-boot"; mkdir -p "$TMP"
           curl -fsSL -o "$TMP/gradle.zip" https://services.gradle.org/distributions/gradle-8.8-bin.zip
           unzip -q "$TMP/gradle.zip" -d "$TMP"
           export GRADLE_HOME="$TMP/gradle-8.8"
           export PATH="$GRADLE_HOME/bin:$PATH"
           gradle --version
-          # si NO hay proyecto Gradle, falla con mensaje claro
           if [ ! -f settings.gradle ] && [ ! -f settings.gradle.kts ]; then
-            echo "❌ No se encontró settings.gradle(.kts) en $PWD. Debes tener un proyecto Gradle válido en 'project_dir'."
+            echo "❌ No se encontró settings.gradle(.kts) en $PWD (project_dir)."
             exit 1
           fi
           gradle wrapper --gradle-version 8.8
@@ -68,15 +61,15 @@ jobs:
           chmod +x gradlew
           ./gradlew --version
 
-      # 3) (Opcional) cache/config de Gradle
       - uses: gradle/actions/setup-gradle@v3
+        with:
+          build-root-directory: ${{ inputs.project_dir }}
 
-      # 4) Build (unit tests + APK)
       - name: Build (unit tests + apk)
         run: |
+          cd "${{ inputs.project_dir }}"
           ./gradlew --no-daemon clean test assembleDebug
 
-      # 5) Emulador (headless, sin KVM)
       - name: Boot emulator (headless)
         run: |
           nohup emulator -avd "${{ inputs.avd_name }}" \
@@ -89,37 +82,40 @@ jobs:
             sleep 2
           done
 
-      # 6) Tests instrumentados
       - name: Instrumentation tests
-        run: ./gradlew --no-daemon connectedDebugAndroidTest
+        run: |
+          cd "${{ inputs.project_dir }}"
+          ./gradlew --no-daemon connectedDebugAndroidTest
 
-      # 7) Logcat → archivo que lee Promtail (host)
       - name: Collect logcat JSON metrics (host path Promtail)
+        id: collect
         run: |
           HOST_LOG_DIR="/home/gha-runner/obs/ci-logs"
           mkdir -p "$HOST_LOG_DIR"
           adb logcat -d | grep METRIC_JSON > "$HOST_LOG_DIR/logcat.jsonl" || true
-          mkdir -p ci/logs && cp -f "$HOST_LOG_DIR/logcat.jsonl" ci/logs/logcat.jsonl 2>/dev/null || true
+          mkdir -p "${{ inputs.project_dir }}/ci/logs" \
+            && cp -f "$HOST_LOG_DIR/logcat.jsonl" "${{ inputs.project_dir }}/ci/logs/logcat.jsonl" 2>/dev/null || true
 
-      # 8) Derivar métricas
       - id: derive
         run: |
-          STARTUP=$(jq -r 'select(.metric=="app_startup_ms") | .value' ci/logs/logcat.jsonl 2>/dev/null | head -n1)
+          FILE="${{ inputs.project_dir }}/ci/logs/logcat.jsonl"
+          STARTUP=$(jq -r 'select(.metric=="app_startup_ms") | .value' "$FILE" 2>/dev/null | head -n1)
           [ -z "$STARTUP" ] && STARTUP=0
           echo "STARTUP_MS=$STARTUP" >> "$GITHUB_OUTPUT"
 
       - id: ratio
         run: |
-          TOTAL=$(grep -R "<testsuite" app/build/outputs/androidTest-results/connected/* 2>/dev/null | awk -F'"' '{for(i=1;i<=NF;i++){if($i==" tests="){print $(i+1)}}}' | paste -sd+ - | bc || echo 1)
-          FAIL=$(grep -R "<testsuite" app/build/outputs/androidTest-results/connected/* 2>/dev/null | awk -F'"' '{for(i=1;i<=NF;i++){if($i==" failures="){print $(i+1)}}}' | paste -sd+ - | bc || echo 0)
+          BASE="${{ inputs.project_dir }}/app/build/outputs/androidTest-results/connected"
+          TOTAL=$(grep -R "<testsuite" "$BASE"/* 2>/dev/null | awk -F'"' '{for(i=1;i<=NF;i++){if($i==" tests="){print $(i+1)}}}' | paste -sd+ - | bc || echo 1)
+          FAIL=$(grep -R "<testsuite" "$BASE"/* 2>/dev/null | awk -F'"' '{for(i=1;i<=NF;i++){if($i==" failures="){print $(i+1)}}}' | paste -sd+ - | bc || echo 0)
           OK=$((TOTAL-FAIL)); export TOTAL OK
-          python3 ci/compute_pass_ratio.py > ratio.txt || echo "0" > ratio.txt
+          python3 "${{ inputs.project_dir }}/ci/compute_pass_ratio.py" > ratio.txt || echo "0" > ratio.txt
           echo "ratio=$(cat ratio.txt)" >> "$GITHUB_OUTPUT"
 
       - uses: actions/upload-artifact@v4
         with:
           name: reports-and-logs
           path: |
-            app/build/reports
-            app/build/outputs/androidTest-results
-            ci/logs/logcat.jsonl
+            ${{ inputs.project_dir }}/app/build/reports
+            ${{ inputs.project_dir }}/app/build/outputs/androidTest-results
+            ${{ inputs.project_dir }}/ci/logs/logcat.jsonl

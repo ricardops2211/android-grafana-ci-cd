@@ -13,7 +13,7 @@ jobs:
   tests:
     uses: ./.github/workflows/reusable_android_emulator_test.yml
     with:
-      project_dir: '.'   # pon aquí la subcarpeta si aplica, ej: 'android'
+      project_dir: '.'   # cambia a 'android' si tu proyecto está en subcarpeta
 
   publish:
     needs: tests
