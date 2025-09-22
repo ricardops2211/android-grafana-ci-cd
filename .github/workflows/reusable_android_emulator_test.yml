@@ -12,6 +12,9 @@ on:
       gpu_mode:
         type: string
         default: 'swiftshader_indirect'
+      project_dir:          # 👈 por si tu Android vive en subcarpeta (ej: "android")
+        type: string
+        default: '.'
     outputs:
       tests_pass_ratio:
         value: ${{ jobs.emu.outputs.tests_pass_ratio }}
@@ -21,49 +24,60 @@ on:
 jobs:
   emu:
     runs-on: self-hosted
+    defaults:
+      run:
+        shell: bash
+        working-directory: ${{ inputs.project_dir }}
     outputs:
       tests_pass_ratio: ${{ steps.ratio.outputs.ratio }}
       startup_ms: ${{ steps.derive.outputs.STARTUP_MS }}
     steps:
       - uses: actions/checkout@v4
 
-      # 👇 AQUI va tu bloque: asegura el wrapper y CRLF
-      - name: Ensure Gradle wrapper is executable (and fix CRLF)
-        shell: bash
+      - name: Debug: show tree
         run: |
-          # Si tu proyecto NO está en la raíz, descomenta y ajusta:
-          # cd android
+          echo "Project dir: $PWD"
+          ls -la || true
 
-          # Normaliza finales de línea y da permisos
-          if [ -f gradlew ]; then sed -i 's/\r$//' gradlew; chmod +x gradlew; fi
-          find gradle -type f -name "*.properties" -exec sed -i 's/\r$//' {} + 2>/dev/null || true
-
-          # Si NO existe gradlew, intenta generarlo
-          if [ ! -f gradlew ]; then
-            echo "gradlew not found; trying to generate wrapper..."
-            # setup-gradle más abajo expondrá 'gradle', pero por si acaso:
-            (command -v gradle >/dev/null && gradle wrapper --gradle-version 8.8) || true
-            [ -f gradlew ] && chmod +x gradlew || true
-          fi
-
-          # Marca en el index (no falla si no es repo limpio)
-          git update-index --chmod=+x gradlew || true
-
+      # 1) JDK
       - uses: actions/setup-java@v4
         with:
           distribution: temurin
           java-version: ${{ inputs.java_version }}
 
+      # 2) FORZAR wrapper limpio SIEMPRE (borra lo que haya y crea uno nuevo)
+      - name: Force fresh Gradle wrapper (8.8)
+        run: |
+          # elimina wrappers/caches potencialmente corruptos
+          rm -f   gradlew gradlew.bat || true
+          rm -rf  gradle/wrapper      || true
+          # descarga gradle binario temporal y genera wrapper
+          TMP="$RUNNER_TEMP/gradle-boot"; mkdir -p "$TMP"
+          curl -fsSL -o "$TMP/gradle.zip" https://services.gradle.org/distributions/gradle-8.8-bin.zip
+          unzip -q "$TMP/gradle.zip" -d "$TMP"
+          export GRADLE_HOME="$TMP/gradle-8.8"
+          export PATH="$GRADLE_HOME/bin:$PATH"
+          gradle --version
+          # si NO hay proyecto Gradle, falla con mensaje claro
+          if [ ! -f settings.gradle ] && [ ! -f settings.gradle.kts ]; then
+            echo "❌ No se encontró settings.gradle(.kts) en $PWD. Debes tener un proyecto Gradle válido en 'project_dir'."
+            exit 1
+          fi
+          gradle wrapper --gradle-version 8.8
+          sed -i 's/\r$//' gradlew || true
+          chmod +x gradlew
+          ./gradlew --version
+
+      # 3) (Opcional) cache/config de Gradle
       - uses: gradle/actions/setup-gradle@v3
 
+      # 4) Build (unit tests + APK)
       - name: Build (unit tests + apk)
-        shell: bash
         run: |
-          # Si tu proyecto está en subcarpeta, reemplaza por: cd <ruta>
           ./gradlew --no-daemon clean test assembleDebug
 
+      # 5) Emulador (headless, sin KVM)
       - name: Boot emulator (headless)
-        shell: bash
         run: |
           nohup emulator -avd "${{ inputs.avd_name }}" \
             -no-window -no-boot-anim -noaudio -no-snapshot \
@@ -75,27 +89,26 @@ jobs:
             sleep 2
           done
 
+      # 6) Tests instrumentados
       - name: Instrumentation tests
-        shell: bash
         run: ./gradlew --no-daemon connectedDebugAndroidTest
 
+      # 7) Logcat → archivo que lee Promtail (host)
       - name: Collect logcat JSON metrics (host path Promtail)
-        shell: bash
         run: |
           HOST_LOG_DIR="/home/gha-runner/obs/ci-logs"
           mkdir -p "$HOST_LOG_DIR"
           adb logcat -d | grep METRIC_JSON > "$HOST_LOG_DIR/logcat.jsonl" || true
           mkdir -p ci/logs && cp -f "$HOST_LOG_DIR/logcat.jsonl" ci/logs/logcat.jsonl 2>/dev/null || true
 
+      # 8) Derivar métricas
       - id: derive
-        shell: bash
         run: |
           STARTUP=$(jq -r 'select(.metric=="app_startup_ms") | .value' ci/logs/logcat.jsonl 2>/dev/null | head -n1)
           [ -z "$STARTUP" ] && STARTUP=0
           echo "STARTUP_MS=$STARTUP" >> "$GITHUB_OUTPUT"
 
       - id: ratio
-        shell: bash
         run: |
           TOTAL=$(grep -R "<testsuite" app/build/outputs/androidTest-results/connected/* 2>/dev/null | awk -F'"' '{for(i=1;i<=NF;i++){if($i==" tests="){print $(i+1)}}}' | paste -sd+ - | bc || echo 1)
           FAIL=$(grep -R "<testsuite" app/build/outputs/androidTest-results/connected/* 2>/dev/null | awk -F'"' '{for(i=1;i<=NF;i++){if($i==" failures="){print $(i+1)}}}' | paste -sd+ - | bc || echo 0)

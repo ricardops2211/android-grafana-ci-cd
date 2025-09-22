@@ -12,6 +12,8 @@ env:
 jobs:
   tests:
     uses: ./.github/workflows/reusable_android_emulator_test.yml
+    with:
+      project_dir: '.'   # pon aquí la subcarpeta si aplica, ej: 'android'
 
   publish:
     needs: tests
@@ -35,7 +37,6 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Enforce SLOs
-        shell: bash
         run: |
           STARTUP="${{ needs.tests.outputs.startup_ms || 0 }}"
           RATIO="${{ needs.tests.outputs.tests_pass_ratio || 0 }}"
