@@ -1,5 +1,5 @@
 package com.example.app
-
+import com.example.app.BuildConfig
 import android.os.Bundle
 import android.util.Log
 import androidx.appcompat.app.AppCompatActivity
