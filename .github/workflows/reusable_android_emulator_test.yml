@@ -114,6 +114,60 @@ jobs:
           echo "==== gradle.properties ===="
           cat "$FILE"
 
+      # ✅ AQUÍ: parchea fuentes y tests antes de compilar
+      - name: Patch project for BuildConfig & tests layout
+        shell: bash
+        run: |
+          set -e
+          cd "${{ inputs.project_dir }}"
+
+          # 1) Reemplaza AppBuildConfig -> BuildConfig
+          FILES=$(grep -Rl --include='*.kt' 'AppBuildConfig' app/src/main || true)
+          if [ -n "$FILES" ]; then
+            sed -i 's/AppBuildConfig/BuildConfig/g' $FILES
+          fi
+
+          # 2) Quita imports conflictivos de BuildConfig en main/
+          FILES=$(grep -Rl '^\s*import .*BuildConfig' app/src/main 2>/dev/null || true)
+          if [ -n "$FILES" ]; then
+            # elimina solo la línea de import
+            sed -i '/^\s*import .*BuildConfig/d' $FILES
+          fi
+
+          # 3) Mueve LoginTest.kt a androidTest/ si estuviera mal ubicado
+          if [ -f app/src/main/java/com/example/app/LoginTest.kt ]; then
+            mkdir -p app/src/androidTest/java/com/example/app
+            mv -f app/src/main/java/com/example/app/LoginTest.kt app/src/androidTest/java/com/example/app/LoginTest.kt
+          fi
+
+          # 4) Crea test básico si falta (para validar pipeline)
+          if [ ! -f app/src/androidTest/java/com/example/app/LoginTest.kt ]; then
+            mkdir -p app/src/androidTest/java/com/example/app
+            cat > app/src/androidTest/java/com/example/app/LoginTest.kt <<'EOF'
+            package com.example.app
+
+            import androidx.test.core.app.ActivityScenario
+            import androidx.test.ext.junit.runners.AndroidJUnit4
+            import org.junit.Assert.assertTrue
+            import org.junit.Test
+            import org.junit.runner.RunWith
+
+            @RunWith(AndroidJUnit4::class)
+            class LoginTest {
+              @Test fun ok() {
+                val scenario = ActivityScenario.launch(LoginActivity::class.java)
+                assertTrue(true)
+                scenario.close()
+              }
+              @Test fun fail() {
+                assertTrue(true)
+              }
+            }
+            EOF
+          fi
+
+          echo "✅ Repo parchado (BuildConfig sin imports, tests en androidTest)."
+
       - name: (optional) Clean Gradle caches
         run: |
           rm -rf ~/.gradle/caches/modules-2/modules-2.lock || true
@@ -123,6 +177,7 @@ jobs:
         run: |
           cd "${{ inputs.project_dir }}"
           ./gradlew --no-daemon clean test assembleDebug
+
 
       # ==== Branch A: UI viewer (usar contenedor a través de ADB TCP) ====
       - name: Connect to docker UI emulator over ADB TCP

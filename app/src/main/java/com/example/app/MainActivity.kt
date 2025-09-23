@@ -1,14 +1,14 @@
 package com.example.app
 
 import android.os.Bundle
-import android.util.Log
+import android.widget.TextView
 import androidx.appcompat.app.AppCompatActivity
-import com.example.app.BuildConfig as AppBuildConfig
 
 class MainActivity : AppCompatActivity() {
   override fun onCreate(savedInstanceState: Bundle?) {
     super.onCreate(savedInstanceState)
-    setContentView(R.layout.activity_main)
-    Log.i("MainActivity", "Hello Grafana CI, debug=${AppBuildConfig.DEBUG}")
+    val tv = TextView(this)
+    tv.text = if (BuildConfig.DEBUG) "Hello (debug)" else "Hello"
+    setContentView(tv)
   }
 }
