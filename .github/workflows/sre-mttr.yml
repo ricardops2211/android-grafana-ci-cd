@@ -149,6 +149,7 @@ jobs:
         with:
           namespace: observability
 
+
       - name: Incident start
         id: start
         uses: ./.github/actions/loki-push
@@ -157,6 +158,7 @@ jobs:
           run_id: ${{ env.RUN_ID }}
           app: ${{ env.APP_LABEL }}
           message: "incident start caused_by=chaos"
+          loki_url: "http://127.0.0.1:3100"
 
       - name: Chaos ON
         uses: ./.github/actions/chaos-toggle
@@ -193,6 +195,7 @@ jobs:
           run_id: ${{ env.RUN_ID }}
           app: ${{ env.APP_LABEL }}
           message: "incident end status=recovered"
+          loki_url: "http://127.0.0.1:3100"   
 
       - name: Calc MTTD/MTTR
         id: calc
@@ -201,6 +204,7 @@ jobs:
           start_ns: ${{ steps.start.outputs.ts_ns }}
           end_ns:   ${{ steps.end.outputs.ts_ns }}
           query_error: '{app="${{ env.APP_LABEL }}"} |= "ERROR"'
+          loki_url: "http://127.0.0.1:3100" 
 
       - name: Upload report
         uses: ./.github/actions/upload-report

@@ -1,21 +1,51 @@
 name: "Loki Push Marker"
+description: "Marca inicio/fin de incidente en Loki"
 inputs:
-  type: { required: true }
-  run_id: { required: true }
-  app: { required: true }
-  message: { required: false, default: "" }
+  type:
+    description: "Tipo de marca (incident_start|incident_end)"
+    required: true
+  run_id:
+    description: "ID de ejecución (github.run_id)"
+    required: true
+  app:
+    description: "Etiqueta app"
+    required: true
+  message:
+    description: "Mensaje opcional"
+    required: false
+    default: ""
+  loki_url:
+    description: "Base URL de Loki (ej: http://127.0.0.1:3100)"
+    required: false
+    default: "http://127.0.0.1:3100"
 outputs:
-  ts_ns: { description: "timestamp ns" }
+  ts_ns:
+    description: "Timestamp en nanosegundos"
+    value: ${{ steps.push.outputs.ts_ns }}
 runs:
   using: "composite"
   steps:
     - id: push
       shell: bash
-      env: { LOKI_URL: http://127.0.0.1:3100/loki/api/v1 }
+      env:
+        LOKI_URL: "${{ inputs.loki_url }}/loki/api/v1"
       run: |
+        set -euo pipefail
         TS_NS=$(date +%s%N)
-        cat > payload.json <<EOF
-        {"streams":[{"stream":{"source":"gha","type":"${{ inputs.type }}","incident_id":"${{ inputs.run_id }}","app":"${{ inputs.app }}"},"values":[["$TS_NS","${{ inputs.message }}"]]}]}
-        EOF
-        curl -sS -X POST -H "Content-Type: application/json" "$LOKI_URL/push" --data-binary @payload.json
-        echo "ts_ns=$TS_NS" >> $GITHUB_OUTPUT
+        cat > payload.json <<'JSON'
+        {"streams":[{"stream":{"source":"gha"},"values":[["TS_PLACEHOLDER","MSG_PLACEHOLDER"]]}]}
+        JSON
+        jq --arg ts "$TS_NS" \
+           --arg typ "${{ inputs.type }}" \
+           --arg run "${{ inputs.run_id }}" \
+           --arg app "${{ inputs.app }}" \
+           --arg msg "${{ inputs.message }}" \
+           '.streams[0].stream += {"type":$typ,"incident_id":$run,"app":$app}
+            | .streams[0].values[0][0] = $ts
+            | .streams[0].values[0][1] = $msg' \
+           payload.json > payload2.json
+
+        curl -sS -X POST -H "Content-Type: application/json" \
+          "$LOKI_URL/push" --data-binary @payload2.json
+
+        echo "ts_ns=$TS_NS" >> "$GITHUB_OUTPUT"

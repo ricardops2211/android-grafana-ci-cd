@@ -1,11 +1,16 @@
 name: "Loki Port-Forward"
+description: "Hace port-forward al servicio de Loki en 3100"
 inputs:
-  namespace: { required: true, default: "observability" }
+  namespace:
+    description: "Namespace de Loki"
+    required: true
+    default: "observability"
 runs:
   using: "composite"
   steps:
     - shell: bash
       run: |
+        set -euo pipefail
         kubectl -n "${{ inputs.namespace }}" port-forward svc/loki 3100:3100 >/tmp/pf.log 2>&1 &
         echo $! > /tmp/pf.pid
         sleep 3
