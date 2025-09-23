@@ -34,7 +34,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      # ========= Defaults seguros para push o dispatch =========
+      # Defaults seguros para push/dispatch
       - name: Set defaults for chaos & SLO
         id: defs
         shell: bash
@@ -54,6 +54,7 @@ jobs:
       - name: Helm repos & namespaces
         shell: bash
         run: |
+          set -euo pipefail
           helm repo add grafana https://grafana.github.io/helm-charts
           helm repo add prometheus-community https://prometheus-community.github.io/helm-charts
           helm repo update
@@ -61,14 +62,16 @@ jobs:
           kubectl get ns monitoring   >/dev/null 2>&1 || kubectl create ns monitoring
           kubectl get ns $NAMESPACE   >/dev/null 2>&1 || kubectl create ns $NAMESPACE
 
-      # Opcional: reconstruir y cargar la imagen en cada push
+      # (Opcional pero útil en push): reconstruir y cargar la imagen local
       - name: Build & load app image
         if: ${{ github.event_name == 'push' }}
         shell: bash
         run: |
+          set -euo pipefail
           docker build -t api-demo:local ./app
           kind load docker-image api-demo:local --name sre-demo
 
+      # Render del values de Alertmanager (inyecta SLACK_WEBHOOK_URL)
       - name: Render monitoring values (Alertmanager Slack)
         env:
           SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
@@ -85,21 +88,42 @@ jobs:
           fi
           (cd k8s && $RENDER < monitoring-values.yaml > monitoring-values.rendered.yaml)
           ls -l k8s/monitoring-values.rendered.yaml
-          # aviso si no se inyectó la URL (secret vacío)
-          grep -q "hooks.slack.com" k8s/monitoring-values.rendered.yaml || echo "::warning::No se detectó la URL de Slack"
+          # Aviso si no se inyectó URL (secret vacío)
+          grep -q "hooks.slack.com" k8s/monitoring-values.rendered.yaml || echo "::warning::No se detectó la URL de Slack en el values renderizado"
 
       - name: Install kube-prometheus-stack (AM/Prom)
         shell: bash
         run: |
+          set -euo pipefail
           helm upgrade --install kps prometheus-community/kube-prometheus-stack \
             -n monitoring -f k8s/monitoring-values.rendered.yaml
-          kubectl -n monitoring rollout status statefulset/kube-prometheus-stack-prometheus --timeout=600s
-          kubectl -n monitoring rollout status statefulset/alertmanager-kube-prometheus-stack-alertmanager --timeout=600s
 
+      - name: Wait for Prometheus & Alertmanager to be ready (kps)
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          # 1) Espera por CR (si reportan condición Available)
+          kubectl -n monitoring wait --for=condition=Available --timeout=600s prometheus/kps-kube-prometheus-stack-prometheus || true
+          kubectl -n monitoring wait --for=condition=Available --timeout=600s alertmanager/kps-kube-prometheus-stack-alertmanager || true
+
+          # 2) Espera por StatefulSets reales (nombres correctos)
+          kubectl -n monitoring rollout status statefulset/prometheus-kps-kube-prometheus-stack-prometheus --timeout=600s || true
+          kubectl -n monitoring rollout status statefulset/alertmanager-kps-kube-prometheus-stack-alertmanager --timeout=600s || true
+
+          # 3) Fallback: espera pods Ready por label
+          kubectl -n monitoring wait pod -l app.kubernetes.io/name=prometheus,app.kubernetes.io/instance=kps --for=condition=Ready --timeout=600s || true
+          kubectl -n monitoring wait pod -l app.kubernetes.io/name=alertmanager,app.kubernetes.io/instance=kps --for=condition=Ready --timeout=600s || true
+
+          echo "---- Prometheus ----"
+          kubectl -n monitoring get pods -l app.kubernetes.io/name=prometheus,app.kubernetes.io/instance=kps -o wide || true
+          echo "---- Alertmanager ----"
+          kubectl -n monitoring get pods -l app.kubernetes.io/name=alertmanager,app.kubernetes.io/instance=kps -o wide || true
 
       - name: Install Loki/Promtail/Grafana
         shell: bash
         run: |
+          set -euo pipefail
           helm upgrade --install loki grafana/loki -n observability -f k8s/loki-values.yaml
           helm upgrade --install promtail grafana/promtail -n observability -f k8s/promtail-values.yaml
           helm upgrade --install grafana grafana/grafana -n observability -f k8s/grafana-values.yaml
@@ -108,12 +132,14 @@ jobs:
       - name: Deploy app
         shell: bash
         run: |
+          set -euo pipefail
           kubectl apply -f k8s/deployment.yaml
           kubectl -n $NAMESPACE rollout status deploy/$DEPLOYMENT --timeout=300s
 
       - name: Apply Grafana dashboard (ConfigMap sidecar)
         shell: bash
         run: |
+          set -euo pipefail
           awk 'BEGIN{print "apiVersion: v1\nkind: ConfigMap\nmetadata:\n  name: dashboard-mttr\n  namespace: observability\n  labels:\n    grafana_dashboard: \"1\"\ndata:\n  sre-mttr-loki.json: |"} {print "    "$0}' k8s/grafana-dashboard-mttr.json > k8s/grafana-dashboard-configmap.yaml
           kubectl -n observability apply -f k8s/grafana-dashboard-configmap.yaml
 
@@ -141,6 +167,7 @@ jobs:
       - name: Hold chaos
         shell: bash
         run: |
+          set -euo pipefail
           CHAOS=${{ steps.defs.outputs.chaos }}
           sleep $((60 * CHAOS))
 
@@ -166,7 +193,7 @@ jobs:
           app: ${{ env.APP_LABEL }}
           message: "incident end status=recovered"
 
-      - name: Calcular MTTD/MTTR
+      - name: Calc MTTD/MTTR
         id: calc
         uses: ./.github/actions/loki-calc-mttr
         with:
