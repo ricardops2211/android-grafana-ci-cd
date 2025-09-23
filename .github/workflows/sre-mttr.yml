@@ -1,11 +1,19 @@
+# .github/workflows/sre-mttr.yml
 name: sre-mttr-loki
+
 on:
   push:
     branches: [ "sre-richie" ]
   workflow_dispatch:
     inputs:
-      chaos_minutes: { description: "Duración falla (min)", required: true, default: "2" }
-      mttr_slo_seconds: { description: "SLO MTTR (s)", required: true, default: "300" }
+      chaos_minutes:
+        description: "Duración falla (min)"
+        required: false
+        default: "2"
+      mttr_slo_seconds:
+        description: "SLO MTTR (s)"
+        required: false
+        default: "300"
 
 concurrency:
   group: sre-mttr-${{ github.ref }}
@@ -26,12 +34,24 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # ========= Defaults seguros para push o dispatch =========
+      - name: Set defaults for chaos & SLO
+        id: defs
+        shell: bash
+        run: |
+          CHAOS="${{ github.event.inputs.chaos_minutes }}"
+          SLO="${{ github.event.inputs.mttr_slo_seconds }}"
+          [ -z "$CHAOS" ] && CHAOS=2
+          [ -z "$SLO" ] && SLO=300
+          echo "chaos=$CHAOS" >> "$GITHUB_OUTPUT"
+          echo "slo=$SLO" >> "$GITHUB_OUTPUT"
+
       - name: kubectl setup
         uses: ./.github/actions/kubectl-setup
         with:
           kubeconfig_b64: ${{ secrets.KUBECONFIG_B64 }}
 
-      - name: helm repos & namespaces
+      - name: Helm repos & namespaces
         shell: bash
         run: |
           helm repo add grafana https://grafana.github.io/helm-charts
@@ -41,15 +61,17 @@ jobs:
           kubectl get ns monitoring   >/dev/null 2>&1 || kubectl create ns monitoring
           kubectl get ns $NAMESPACE   >/dev/null 2>&1 || kubectl create ns $NAMESPACE
 
-      # (OPCIONAL pero recomendado en push): reconstruir y cargar imagen si cambió el código
+      # Opcional: reconstruir y cargar la imagen en cada push
       - name: Build & load app image
+        if: ${{ github.event_name == 'push' }}
         shell: bash
         run: |
           docker build -t api-demo:local ./app
           kind load docker-image api-demo:local --name sre-demo
 
-      - name: install kube-prometheus-stack (AM/Prom)
-        env: { SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }} }
+      - name: Install kube-prometheus-stack (AM/Prom)
+        env:
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
         shell: bash
         run: |
           sudo apt-get update && sudo apt-get install -y gettext-base
@@ -58,7 +80,7 @@ jobs:
           kubectl -n monitoring rollout status statefulset/kube-prometheus-stack-prometheus --timeout=600s
           kubectl -n monitoring rollout status statefulset/alertmanager-kube-prometheus-stack-alertmanager --timeout=600s
 
-      - name: install loki/promtail/grafana
+      - name: Install Loki/Promtail/Grafana
         shell: bash
         run: |
           helm upgrade --install loki grafana/loki -n observability -f k8s/loki-values.yaml
@@ -66,24 +88,24 @@ jobs:
           helm upgrade --install grafana grafana/grafana -n observability -f k8s/grafana-values.yaml
           kubectl -n observability rollout status deploy/grafana --timeout=600s
 
-      - name: deploy app
+      - name: Deploy app
         shell: bash
         run: |
           kubectl apply -f k8s/deployment.yaml
           kubectl -n $NAMESPACE rollout status deploy/$DEPLOYMENT --timeout=300s
 
-      - name: apply Grafana dashboard (ConfigMap sidecar)
+      - name: Apply Grafana dashboard (ConfigMap sidecar)
         shell: bash
         run: |
           awk 'BEGIN{print "apiVersion: v1\nkind: ConfigMap\nmetadata:\n  name: dashboard-mttr\n  namespace: observability\n  labels:\n    grafana_dashboard: \"1\"\ndata:\n  sre-mttr-loki.json: |"} {print "    "$0}' k8s/grafana-dashboard-mttr.json > k8s/grafana-dashboard-configmap.yaml
           kubectl -n observability apply -f k8s/grafana-dashboard-configmap.yaml
 
-      - name: port-forward loki
+      - name: Port-forward Loki
         uses: ./.github/actions/loki-port-forward
         with:
           namespace: observability
 
-      - name: incident start
+      - name: Incident start
         id: start
         uses: ./.github/actions/loki-push
         with:
@@ -92,30 +114,33 @@ jobs:
           app: ${{ env.APP_LABEL }}
           message: "incident start caused_by=chaos"
 
-      - name: chaos on
+      - name: Chaos ON
         uses: ./.github/actions/chaos-toggle
         with:
           namespace: ${{ env.NAMESPACE }}
           deployment: ${{ env.DEPLOYMENT }}
           fail_rate: "1.0"
 
-      - name: hold chaos
-        run: sleep $((60 * ${{ github.event.inputs.chaos_minutes || 2 }}))
+      - name: Hold chaos
+        shell: bash
+        run: |
+          CHAOS=${{ steps.defs.outputs.chaos }}
+          sleep $((60 * CHAOS))
 
-      - name: chaos off
+      - name: Chaos OFF
         uses: ./.github/actions/chaos-toggle
         with:
           namespace: ${{ env.NAMESPACE }}
           deployment: ${{ env.DEPLOYMENT }}
           fail_rate: "0.0"
 
-      - name: wait stable
+      - name: Wait stable
         uses: ./.github/actions/wait-stable
         with:
           namespace: ${{ env.NAMESPACE }}
           app_label: ${{ env.APP_LABEL }}
 
-      - name: incident end
+      - name: Incident end
         id: end
         uses: ./.github/actions/loki-push
         with:
@@ -124,27 +149,28 @@ jobs:
           app: ${{ env.APP_LABEL }}
           message: "incident end status=recovered"
 
-      - name: calc MTTD/MTTR
+      - name: Calcular MTTD/MTTR
         id: calc
         uses: ./.github/actions/loki-calc-mttr
         with:
           start_ns: ${{ steps.start.outputs.ts_ns }}
-          end_ns: ${{ steps.end.outputs.ts_ns }}
+          end_ns:   ${{ steps.end.outputs.ts_ns }}
           query_error: '{app="${{ env.APP_LABEL }}"} |= "ERROR"'
 
-      - name: upload report
+      - name: Upload report
         uses: ./.github/actions/upload-report
         with:
-          run_id: ${{ env.RUN_ID }}
+          run_id:       ${{ env.RUN_ID }}
           mttr_seconds: ${{ steps.calc.outputs.mttr_seconds }}
           mttd_seconds: ${{ steps.calc.outputs.mttd_seconds }}
 
-      - name: enforce SLO
+      - name: Enforce SLO
         uses: ./.github/actions/enforce-slo
         with:
           mttr_seconds: ${{ steps.calc.outputs.mttr_seconds }}
-          slo_seconds: ${{ github.event.inputs.mttr_slo_seconds || 300 }}
+          slo_seconds:  ${{ steps.defs.outputs.slo }}
 
-      - name: cleanup port-forward
+      - name: Cleanup port-forward
         if: always()
+        shell: bash
         run: pkill -f "port-forward.*svc/loki" || true
