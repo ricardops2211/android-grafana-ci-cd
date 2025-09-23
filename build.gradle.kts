@@ -7,3 +7,12 @@ plugins {
 allprojects {
   // nada especial aquí normalmente
 }
+
+android {
+  compileSdk = 34
+  defaultConfig {
+    minSdk = 24
+    targetSdk = 34
+    testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
+  }
+}
