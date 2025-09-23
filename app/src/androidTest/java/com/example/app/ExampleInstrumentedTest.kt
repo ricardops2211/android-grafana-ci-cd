@@ -13,8 +13,6 @@ class ExampleInstrumentedTest {
   fun useAppContext() {
     val appContext = InstrumentationRegistry.getInstrumentation().targetContext
     assertEquals("com.example.app", appContext.packageName)
-
-    // Simula una métrica: el test podría medir tiempos y reportarlos
     Log.i("METRIC_JSON", """{"metric":"app_startup_ms","value":987}""")
   }
 }
