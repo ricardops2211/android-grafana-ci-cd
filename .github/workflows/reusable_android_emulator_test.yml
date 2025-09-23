@@ -65,19 +65,17 @@ jobs:
         with:
           build-root-directory: ${{ inputs.project_dir }}
 
-            - name: Ensure AndroidX flags in gradle.properties
+      # STEP PARA DESPLEGAR ANDROIDX
+      - name: Ensure AndroidX flags in gradle.properties
         run: |
           FILE="${{ inputs.project_dir }}/gradle.properties"
           touch "$FILE"
-          # quita posibles líneas previas para evitar duplicados
           sed -i '/^android.useAndroidX=/d' "$FILE" || true
           sed -i '/^android.enableJetifier=/d' "$FILE" || true
-          # activa AndroidX + Jetifier
           {
             echo "android.useAndroidX=true"
             echo "android.enableJetifier=true"
           } >> "$FILE"
-
           echo "==== gradle.properties ===="
           cat "$FILE"
 
@@ -85,7 +83,6 @@ jobs:
         run: |
           rm -rf ~/.gradle/caches/modules-2/modules-2.lock || true
           rm -rf ~/.gradle/caches/*/plugin-resolution || true
-
 
       - name: Build (unit tests + apk)
         run: |
