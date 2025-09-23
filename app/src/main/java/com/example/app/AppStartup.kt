@@ -1,6 +1,7 @@
 package com.example.app
 
 import android.app.Application
+import com.example.app.BuildConfig
 import android.util.Log
 import com.example.app.BuildConfig
 

@@ -2,6 +2,7 @@ package com.example.app
 import com.example.app.BuildConfig
 import android.os.Bundle
 import android.util.Log
+import com.example.app.BuildConfig
 import androidx.appcompat.app.AppCompatActivity
 
 class MainActivity : AppCompatActivity() {

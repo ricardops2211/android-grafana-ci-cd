@@ -16,14 +16,16 @@ android {
     testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
   }
 
-  // Fuerza Java 17 para Java y Kotlin
+  // 👇 Fuerza la generación de BuildConfig
+  buildFeatures {
+    buildConfig = true
+  }
+
   compileOptions {
     sourceCompatibility = JavaVersion.VERSION_17
     targetCompatibility = JavaVersion.VERSION_17
   }
-  kotlinOptions {
-    jvmTarget = "17"
-  }
+  kotlinOptions { jvmTarget = "17" }
 
   buildTypes {
     release {
@@ -36,21 +38,14 @@ android {
   }
 }
 
-// Toolchain Kotlin 17 (recomendado)
-kotlin {
-  jvmToolchain(17)
-}
+kotlin { jvmToolchain(17) }
 
 dependencies {
-  // main
   implementation("androidx.core:core-ktx:1.13.1")
   implementation("androidx.appcompat:appcompat:1.7.0")
   implementation("com.google.android.material:material:1.12.0")
 
-  // unit test
   testImplementation("junit:junit:4.13.2")
-
-  // instrumented test
   androidTestImplementation("androidx.test.ext:junit:1.2.1")
   androidTestImplementation("androidx.test.espresso:espresso-core:3.6.1")
 }
