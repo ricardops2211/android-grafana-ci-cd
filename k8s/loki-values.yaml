@@ -1,16 +1,26 @@
+# k8s/loki-values.yaml — Loki en modo SingleBinary (sin object storage externo)
+deploymentMode: SingleBinary
+
 loki:
   auth_enabled: false
-  server: { http_listen_port: 3100 }
-  commonConfig: { replication_factor: 1 }
-  storage: { type: filesystem }
+  server:
+    http_listen_port: 3100
+  commonConfig:
+    replication_factor: 1
+  storage:
+    type: filesystem
+    filesystem: {}
   schemaConfig:
     configs:
       - from: 2020-10-15
         store: boltdb-shipper
         object_store: filesystem
         schema: v13
-        index: { prefix: index_, period: 24h }
+        index:
+          prefix: index_
+          period: 24h
 
+# Habilita el Ruler y apunta a Alertmanager del kube-prometheus-stack
 ruler:
   enabled: true
   alertmanagerUrl: "http://kube-prometheus-stack-alertmanager.monitoring.svc:9093"
@@ -26,3 +36,10 @@ ruler:
             annotations:
               summary: "High error rate in {{ $labels.app }}"
               description: "Elevated errors detected by Loki logs."
+
+# (Opcional) Persistencia local del SingleBinary
+singleBinary:
+  replicas: 1
+  persistence:
+    enabled: false     # ponlo en true si quieres PVC
+    size: 10Gi

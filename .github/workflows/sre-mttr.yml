@@ -129,6 +129,7 @@ jobs:
           helm upgrade --install grafana grafana/grafana -n observability -f k8s/grafana-values.yaml
           kubectl -n observability rollout status deploy/grafana --timeout=600s
 
+
       - name: Deploy app
         shell: bash
         run: |
