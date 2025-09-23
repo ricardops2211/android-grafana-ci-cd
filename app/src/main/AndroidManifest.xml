@@ -3,16 +3,14 @@
       android:allowBackup="true"
       android:supportsRtl="true"
       android:label="Demo"
-      android:theme="@style/Theme.MaterialComponents.DayNight.NoActionBar">
-
+      android:theme="@style/AppTheme">   <!-- 👈 usa tu tema -->
     <activity
         android:name=".MainActivity"
-        android:exported="true">  <!-- 👈 requerido en Android 12+ -->
+        android:exported="true">
       <intent-filter>
         <action android:name="android.intent.action.MAIN"/>
         <category android:name="android.intent.category.LAUNCHER"/>
       </intent-filter>
     </activity>
-
   </application>
 </manifest>

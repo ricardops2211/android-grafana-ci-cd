@@ -1,3 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
 <resources>
-  <style name="Theme.Material3.DayNight.NoActionBar" parent="Theme.Material3.DayNight.NoActionBar" />
+    <!-- Tema de la app: hereda de Material 3 -->
+    <style name="AppTheme" parent="Theme.Material3.DayNight.NoActionBar">
+        <!-- personalizaciones opcionales -->
+        <item name="android:statusBarColor">?attr/colorPrimary</item>
+    </style>
 </resources>
