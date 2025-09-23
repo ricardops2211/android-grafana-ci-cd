@@ -45,7 +45,18 @@ runs:
             | .streams[0].values[0][1] = $msg' \
            payload.json > payload2.json
 
-        curl -sS -X POST -H "Content-Type: application/json" \
-          "$LOKI_URL/push" --data-binary @payload2.json
+        # Retries con backoff: 10 intentos [0.5s,1s,2s,...]
+        n=0
+        until curl -fsS -X POST -H "Content-Type: application/json" \
+                 "$LOKI_URL/push" --data-binary @payload2.json; do
+          n=$((n+1))
+          if [ $n -ge 10 ]; then
+            echo "ERROR: no se pudo hacer push a Loki tras $n intentos" >&2
+            echo "Log de payload:" >&2
+            head -c 1000 payload2.json >&2 || true
+            exit 1
+          fi
+          sleep "$(awk "BEGIN { print 0.5 * (2 ^ $n) }")" 2>/dev/null || sleep 1
+        done
 
         echo "ts_ns=$TS_NS" >> "$GITHUB_OUTPUT"

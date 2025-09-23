@@ -149,6 +149,9 @@ jobs:
         with:
           namespace: observability
 
+      - name: Grace period for Loki
+        shell: bash
+        run: sleep 2
 
       - name: Incident start
         id: start
@@ -158,7 +161,8 @@ jobs:
           run_id: ${{ env.RUN_ID }}
           app: ${{ env.APP_LABEL }}
           message: "incident start caused_by=chaos"
-          loki_url: "http://127.0.0.1:3100"
+          loki_url: "http://127.0.0.1:3100"   
+
 
       - name: Chaos ON
         uses: ./.github/actions/chaos-toggle
