@@ -1,16 +1,10 @@
 pluginManagement {
   repositories {
+    gradlePluginPortal()
     google()
     mavenCentral()
-    gradlePluginPortal()
-  }
-  plugins {
-    // ✅ Versiones explícitas de los plugins
-    id("com.android.application") version "8.5.2"
-    id("org.jetbrains.kotlin.android") version "1.9.24"
   }
 }
-
 dependencyResolutionManagement {
   repositoriesMode.set(RepositoriesMode.FAIL_ON_PROJECT_REPOS)
   repositories {
@@ -18,6 +12,5 @@ dependencyResolutionManagement {
     mavenCentral()
   }
 }
-
 rootProject.name = "android-grafana-ci-cd"
 include(":app")
