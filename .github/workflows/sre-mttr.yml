@@ -125,7 +125,7 @@ jobs:
         run: |
           set -euo pipefail
 
-          # Loki: limpia e instala SingleBinary sí o sí (sin canary)
+          # Loki: limpia e instala SingleBinary sí o sí (sin canary ni tests)
           helm -n observability uninstall loki || true
           kubectl -n observability delete po,sts,deploy,svc,cm,secret -l app.kubernetes.io/instance=loki --wait=false || true
 
@@ -134,8 +134,8 @@ jobs:
             --set read.replicas=0 --set write.replicas=0 --set backend.replicas=0 \
             --set chunksCache.enabled=false --set resultsCache.enabled=false \
             --set gateway.enabled=false \
-            --set canary.enabled=false \
-            --set lokiCanary.enabled=false \
+            --set canary.enabled=false --set lokiCanary.enabled=false \
+            --set test.enabled=false \
             -f k8s/loki-values.yaml
 
           echo "== Loki values efectivos =="
@@ -155,11 +155,8 @@ jobs:
           set -euo pipefail
           kubectl -n observability wait --for=condition=Ready --timeout=600s pod -l app.kubernetes.io/name=loki || true
           echo "---- Pods Loki ----"
-          kubectl -n observability get po -l app.kubernetes.io/instance=loki -o wide || true
-          echo "---- Describe Loki ----"
-          kubectl -n observability describe po -l app.kubernetes.io/name=loki || true
-          echo "---- Eventos observability ----"
-          kubectl -n observability get events --sort-by=.lastTimestamp | tail -n 50 || true
+          kubectl -n observability get po -l app.kubernetes.io/name=loki -o wide || true
+
 
 
 
