@@ -1,20 +1,19 @@
-# Fuerza modo SingleBinary (archivo local, sin object storage)
-deploymentMode: SingleBinary
+# k8s/loki-values.yaml
+deploymentMode: SingleBinary        # clave
 
-# Desactiva el modo simpleScalable explícitamente
-read:
-  replicas: 0
-write:
-  replicas: 0
-backend:
-  replicas: 0
+read:     { replicas: 0 }           # fuerza off SimpleScalable
+write:    { replicas: 0 }
+backend:  { replicas: 0 }
+
+chunksCache:   { enabled: false }
+resultsCache:  { enabled: false }
+gateway:       { enabled: false }
+canary:        { enabled: false }
 
 loki:
   auth_enabled: false
-  server:
-    http_listen_port: 3100
-  commonConfig:
-    replication_factor: 1
+  server: { http_listen_port: 3100 }
+  commonConfig: { replication_factor: 1 }
   storage:
     type: filesystem
     filesystem: {}
@@ -24,11 +23,8 @@ loki:
         store: boltdb-shipper
         object_store: filesystem
         schema: v13
-        index:
-          prefix: index_
-          period: 24h
+        index: { prefix: index_, period: 24h }
 
-# Habilita Ruler hacia Alertmanager del kube-prometheus-stack
 ruler:
   enabled: true
   alertmanagerUrl: "http://kube-prometheus-stack-alertmanager.monitoring.svc:9093"
@@ -45,9 +41,8 @@ ruler:
               summary: "High error rate in {{ $labels.app }}"
               description: "Elevated errors detected by Loki logs."
 
-# Réplica única del binario
 singleBinary:
   replicas: 1
   persistence:
-    enabled: false   # pon true si quieres PVC
+    enabled: false
     size: 10Gi
