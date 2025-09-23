@@ -38,23 +38,37 @@ jobs:
           echo "Project dir: ${{ inputs.project_dir }}"
           ls -la "${{ inputs.project_dir }}" || true
 
-      # --- (OPCIONAL) Levantar emulador con UI web (noVNC) ---
+      # No convivan procesos de emu/adb de runs anteriores
+      - name: Kill previous emulators/adb
+        run: |
+          set +e
+          adb kill-server || true
+          pkill -f "qemu-system" || true
+          pkill -f "emulator.*-avd" || true
+          sleep 2
+          ps aux | egrep "emulator|qemu|adb" || true
+
+      # --- (Opcional) Levantar emulador con UI web (noVNC) ---
       - name: Start Android UI (noVNC) via Docker Compose
         if: ${{ inputs.enable_ui_viewer }}
         env:
           UI_DIR: /home/gha-runner/android-ui
         run: |
+          set -e
           mkdir -p "$UI_DIR"
           cp -f infra/android-ui/docker-compose.yml "$UI_DIR/docker-compose.yml"
           cd "$UI_DIR"
           docker compose up -d
-          for i in {1..60}; do
+          # Espera a que noVNC levante
+          for i in {1..90}; do
             curl -sSf http://localhost:6080 >/dev/null 2>&1 && break
             sleep 2
           done
-          HOST_IP=$(hostname -I 2>/dev/null | awk '{print $1}'); [ -z "$HOST_IP" ] && HOST_IP="localhost"
-          echo "Open http://$HOST_IP:6080"
-
+          # Calcula IP del host (no la del bridge)
+          HOST_IP=$(ip route get 1.1.1.1 | awk '{print $7; exit}')
+          [ -z "$HOST_IP" ] && HOST_IP="localhost"
+          echo "ANDROID_UI_URL=http://$HOST_IP:6080" >> $GITHUB_ENV
+          echo "Open $ANDROID_UI_URL"
 
       - uses: actions/setup-java@v4
         with:
@@ -86,7 +100,7 @@ jobs:
         with:
           build-root-directory: ${{ inputs.project_dir }}
 
-      # STEP PARA DESPLEGAR ANDROIDX
+      # Asegura AndroidX
       - name: Ensure AndroidX flags in gradle.properties
         run: |
           FILE="${{ inputs.project_dir }}/gradle.properties"
@@ -110,19 +124,61 @@ jobs:
           cd "${{ inputs.project_dir }}"
           ./gradlew --no-daemon clean test assembleDebug
 
-      - name: Boot emulator (headless)
+      # ==== Branch A: UI viewer (usar contenedor a través de ADB TCP) ====
+      - name: Connect to docker UI emulator over ADB TCP
+        if: ${{ inputs.enable_ui_viewer }}
         run: |
+          set -e
+          HOST_IP=$(ip route get 1.1.1.1 | awk '{print $7; exit}')
+          [ -z "$HOST_IP" ] && HOST_IP="127.0.0.1"
+          # Conecta al ADB del contenedor (mapeado en 5555)
+          adb connect "$HOST_IP:5555" || true
+          # Espera robusta: boot, animación parada y Package Manager listo
+          for i in {1..240}; do
+            BOOT=$(adb -s "$HOST_IP:5555" shell getprop sys.boot_completed 2>/dev/null | tr -d '\r')
+            ANIM=$(adb -s "$HOST_IP:5555" shell getprop init.svc.bootanim 2>/dev/null | tr -d '\r')
+            PMOK=0
+            adb -s "$HOST_IP:5555" shell cmd package list packages >/dev/null 2>&1 && PMOK=1
+            if [ "$BOOT" = "1" ] && [ "$ANIM" = "stopped" ] && [ $PMOK -eq 1 ]; then
+              echo "Emulator (docker) is ready."
+              break
+            fi
+            sleep 2
+          done
+          echo "ANDROID_SERIAL=$HOST_IP:5555" >> $GITHUB_ENV
+
+      # ==== Branch B: Headless local (un solo emu en 5554) ====
+      - name: Boot emulator (headless, single 5554)
+        if: ${{ !inputs.enable_ui_viewer }}
+        run: |
+          set -e
           nohup emulator -avd "${{ inputs.avd_name }}" \
+            -port 5554 \
             -no-window -no-boot-anim -noaudio -no-snapshot \
             -gpu ${{ inputs.gpu_mode }} -accel off -qemu -m 3072 >/dev/null 2>&1 &
           adb wait-for-device
-          for i in {1..120}; do
-            b=$(adb shell getprop sys.boot_completed 2>/dev/null | tr -d '\r')
-            [ "$b" = "1" ] && break
+          for i in {1..240}; do
+            BOOT=$(adb -s emulator-5554 shell getprop sys.boot_completed 2>/dev/null | tr -d '\r')
+            ANIM=$(adb -s emulator-5554 shell getprop init.svc.bootanim 2>/dev/null | tr -d '\r')
+            PMOK=0
+            adb -s emulator-5554 shell cmd package list packages >/dev/null 2>&1 && PMOK=1
+            if [ "$BOOT" = "1" ] && [ "$ANIM" = "stopped" ] && [ $PMOK -eq 1 ]; then
+              echo "Emulator (headless) is ready."
+              break
+            fi
             sleep 2
           done
+          echo "ANDROID_SERIAL=emulator-5554" >> $GITHUB_ENV
 
-      - name: Instrumentation tests
+      # Aumenta timeouts de instalación por si la VM va lenta
+      - name: Bump adb/Gradle timeouts
+        run: |
+          echo "ANDROID_ADB_INSTALL_TIMEOUT=8" >> $GITHUB_ENV
+          echo "org.gradle.jvmargs=-Xmx2g -Dkotlin.daemon.jvm.options=-Xmx1g" >> $GITHUB_ENV
+
+      - name: Instrumentation tests (single device)
+        env:
+          ANDROID_SERIAL: ${{ env.ANDROID_SERIAL }}
         run: |
           cd "${{ inputs.project_dir }}"
           ./gradlew --no-daemon connectedDebugAndroidTest
@@ -132,7 +188,7 @@ jobs:
         run: |
           HOST_LOG_DIR="/home/gha-runner/obs/ci-logs"
           mkdir -p "$HOST_LOG_DIR"
-          adb logcat -d | grep METRIC_JSON > "$HOST_LOG_DIR/logcat.jsonl" || true
+          adb -s "${{ env.ANDROID_SERIAL }}" logcat -d | grep METRIC_JSON > "$HOST_LOG_DIR/logcat.jsonl" || true
           mkdir -p "${{ inputs.project_dir }}/ci/logs" \
             && cp -f "$HOST_LOG_DIR/logcat.jsonl" "${{ inputs.project_dir }}/ci/logs/logcat.jsonl" 2>/dev/null || true
 
