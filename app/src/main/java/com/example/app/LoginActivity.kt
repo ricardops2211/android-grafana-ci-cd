@@ -1,10 +1,9 @@
 package com.example.app
 
 import android.os.Bundle
-import com.example.app.BuildConfig
 import android.util.Log
 import androidx.appcompat.app.AppCompatActivity
-import com.example.app.BuildConfig
+import com.example.app.BuildConfig as AppBuildConfig 
 
 class LoginActivity : AppCompatActivity() {
   override fun onCreate(savedInstanceState: Bundle?) {

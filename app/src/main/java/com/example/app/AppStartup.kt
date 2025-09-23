@@ -1,9 +1,9 @@
 package com.example.app
 
-import android.app.Application
-import com.example.app.BuildConfig
+import android.os.Bundle
 import android.util.Log
-import com.example.app.BuildConfig
+import androidx.appcompat.app.AppCompatActivity
+import com.example.app.BuildConfig as AppBuildConfig 
 
 class AppStartup : Application() {
   override fun onCreate() {
