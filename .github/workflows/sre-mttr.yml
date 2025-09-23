@@ -125,7 +125,7 @@ jobs:
         run: |
           set -euo pipefail
 
-          # Loki: limpia e instala SingleBinary sí o sí
+          # Loki: limpia e instala SingleBinary sí o sí (sin canary)
           helm -n observability uninstall loki || true
           kubectl -n observability delete po,sts,deploy,svc,cm,secret -l app.kubernetes.io/instance=loki --wait=false || true
 
@@ -133,7 +133,9 @@ jobs:
             --set deploymentMode=SingleBinary \
             --set read.replicas=0 --set write.replicas=0 --set backend.replicas=0 \
             --set chunksCache.enabled=false --set resultsCache.enabled=false \
-            --set gateway.enabled=false --set canary.enabled=false \
+            --set gateway.enabled=false \
+            --set canary.enabled=false \
+            --set lokiCanary.enabled=false \
             -f k8s/loki-values.yaml
 
           echo "== Loki values efectivos =="
@@ -141,13 +143,10 @@ jobs:
 
           echo "== Recursos de Loki =="
           kubectl -n observability get all -l app.kubernetes.io/instance=loki -o wide || true
-          kubectl -n observability get po -l app.kubernetes.io/name=loki -o wide || true
 
-          # Promtail y Grafana como tenías
+          # Promtail y Grafana
           helm upgrade --install promtail grafana/promtail -n observability -f k8s/promtail-values.yaml
           helm upgrade --install grafana  grafana/grafana  -n observability -f k8s/grafana-values.yaml
-
-          # Espera Grafana
           kubectl -n observability rollout status deploy/grafana --timeout=600s
 
       - name: Wait for Loki to be Ready
@@ -155,15 +154,13 @@ jobs:
         run: |
           set -euo pipefail
           kubectl -n observability wait --for=condition=Ready --timeout=600s pod -l app.kubernetes.io/name=loki || true
-
           echo "---- Pods Loki ----"
-          kubectl -n observability get po -l app.kubernetes.io/name=loki -o wide || true
-
-          echo "---- Describe Loki (si falla readiness) ----"
+          kubectl -n observability get po -l app.kubernetes.io/instance=loki -o wide || true
+          echo "---- Describe Loki ----"
           kubectl -n observability describe po -l app.kubernetes.io/name=loki || true
-
           echo "---- Eventos observability ----"
           kubectl -n observability get events --sort-by=.lastTimestamp | tail -n 50 || true
+
 
 
 

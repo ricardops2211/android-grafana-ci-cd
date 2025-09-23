@@ -11,35 +11,41 @@ runs:
     - shell: bash
       run: |
         set -euo pipefail
-
         NS="${{ inputs.namespace }}"
 
-        echo "Esperando a que Loki esté Ready..."
-        kubectl -n "$NS" wait --for=condition=Ready --timeout=600s pod -l app.kubernetes.io/name=loki
+        echo "Buscando pods de Loki (label app.kubernetes.io/name=loki)..."
+        for i in {1..60}; do
+          CNT=$(kubectl -n "$NS" get po -l app.kubernetes.io/name=loki --no-headers 2>/dev/null | wc -l || echo 0)
+          if [ "$CNT" -gt 0 ]; then break; fi
+          sleep 3
+        done
 
-        # Elige un Pod concreto (primer match)
+        if [ "${CNT:-0}" -eq 0 ]; then
+          echo "ERROR: No hay pods 'loki' en $NS tras 180s (ignorando canary)."
+          kubectl -n "$NS" get all || true
+          exit 1
+        fi
+
+        echo "Esperando Ready del pod 'loki' (máx 300s)..."
+        kubectl -n "$NS" wait --for=condition=Ready --timeout=300s pod -l app.kubernetes.io/name=loki
+
         POD="$(kubectl -n "$NS" get pod -l app.kubernetes.io/name=loki -o jsonpath='{.items[0].metadata.name}')"
         echo "Usaremos el pod: $POD"
 
-        # Arranca el PF en background contra el POD (más fiable que contra el Service)
         kubectl -n "$NS" port-forward pod/"$POD" 3100:3100 >/tmp/pf.log 2>&1 &
         echo $! > /tmp/pf.pid
 
-        # Espera activa hasta que la API de Loki responda
         echo "Chequeando http://127.0.0.1:3100/ready ..."
         for i in {1..60}; do
           if curl -fsS http://127.0.0.1:3100/ready >/dev/null; then
             echo "Loki READY en local"
             break
           fi
-          # Si el PF murió, falla rápido
           if ! ps -p "$(cat /tmp/pf.pid)" >/dev/null 2>&1; then
             echo "ERROR: port-forward se detuvo. Logs:"
             sed -n '1,200p' /tmp/pf.log || true
             exit 1
           fi
-          sleep 1
+          sleep 2
         done
-
-        # Chequeo extra de endpoint de status (no obligatorio, pero útil)
         curl -fsS http://127.0.0.1:3100/metrics >/dev/null || true
