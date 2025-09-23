@@ -1,0 +1,14 @@
+name: "Wait Stable"
+inputs: { namespace: {required: true}, app_label: {required: true} }
+runs:
+  using: "composite"
+  steps:
+    - shell: bash
+      run: |
+        OK=0
+        for i in {1..24}; do
+          ERR=$(kubectl -n "${{ inputs.namespace }}" logs -l app=${{ inputs.app_label }} --tail=200 --since=10s | grep -ci "ERROR" || true)
+          if [ "$ERR" -eq 0 ]; then OK=$((OK+1)); else OK=0; fi
+          if [ "$OK" -ge 12 ]; then echo "Stable 120s"; break; fi
+          sleep 10
+        done

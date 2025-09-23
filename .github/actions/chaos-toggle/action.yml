@@ -1,0 +1,7 @@
+name: "Chaos Toggle"
+inputs: { namespace: {required: true}, deployment: {required: true}, fail_rate: {required: true} }
+runs:
+  using: "composite"
+  steps:
+    - shell: bash
+      run: kubectl -n "${{ inputs.namespace }}" set env deploy/${{ inputs.deployment }} FAIL_RATE="${{ inputs.fail_rate }}"

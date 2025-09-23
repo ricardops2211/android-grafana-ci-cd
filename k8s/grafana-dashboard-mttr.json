@@ -1,0 +1,47 @@
+{
+  "title": "SRE MTTR (Loki)",
+  "tags": ["sre","mttr","loki"],
+  "panels": [
+    {
+      "type": "stat",
+      "title": "Error rate (5m)",
+      "targets": [
+        {
+          "refId": "A",
+          "queryType": "range",
+          "expr": "sum by (app) (rate({app=\\\"api-demo\\\"} |= \\\"ERROR\\\" [5m]))",
+          "datasource": {"type":"loki","uid":"Loki"}
+        }
+      ],
+      "fieldConfig": {"defaults":{"unit":"ops"}}
+    },
+    {
+      "type": "timeseries",
+      "title": "Disponibilidad (soft)",
+      "targets": [
+        {
+          "refId": "A",
+          "queryType": "range",
+          "expr": "100 * (1 - ( sum(rate({app=\\\"api-demo\\\"} |= \\\"ERROR\\\"[5m])) / clamp_min(sum(rate({app=\\\"api-demo\\\"}[5m])),1) ))",
+          "datasource": {"type":"loki","uid":"Loki"}
+        }
+      ],
+      "fieldConfig": {"defaults":{"unit":"percent"}}
+    },
+    {
+      "type": "logs",
+      "title": "Incidentes (start/end)",
+      "targets": [
+        { "refId": "A", "queryType": "range", "expr": "{source=\\\"gha\\\", type=\\\"incident_start\\\"}", "datasource": {"type":"loki","uid":"Loki"} },
+        { "refId": "B", "queryType": "range", "expr": "{source=\\\"gha\\\", type=\\\"incident_end\\\"}",   "datasource": {"type":"loki","uid":"Loki"} }
+      ],
+      "transformations": [
+        { "id": "join", "options": { "mode": "outer", "on": ["labels.incident_id"] } },
+        { "id": "calculateField", "options": { "mode": "binary", "binary": { "reducer": "subtract", "left": "ts(B)", "right": "ts(A)" }, "alias": "MTTR_ns", "replaceFields": false } },
+        { "id": "calculateField", "options": { "mode": "binary", "binary": { "reducer": "divide", "left": "MTTR_ns", "right": 1000000000 }, "alias": "MTTR_s", "replaceFields": false } }
+      ]
+    }
+  ],
+  "schemaVersion": 39,
+  "version": 1
+}

@@ -1,0 +1,21 @@
+name: "Loki Push Marker"
+inputs:
+  type: { required: true }
+  run_id: { required: true }
+  app: { required: true }
+  message: { required: false, default: "" }
+outputs:
+  ts_ns: { description: "timestamp ns" }
+runs:
+  using: "composite"
+  steps:
+    - id: push
+      shell: bash
+      env: { LOKI_URL: http://127.0.0.1:3100/loki/api/v1 }
+      run: |
+        TS_NS=$(date +%s%N)
+        cat > payload.json <<EOF
+        {"streams":[{"stream":{"source":"gha","type":"${{ inputs.type }}","incident_id":"${{ inputs.run_id }}","app":"${{ inputs.app }}"},"values":[["$TS_NS","${{ inputs.message }}"]]}]}
+        EOF
+        curl -sS -X POST -H "Content-Type: application/json" "$LOKI_URL/push" --data-binary @payload.json
+        echo "ts_ns=$TS_NS" >> $GITHUB_OUTPUT

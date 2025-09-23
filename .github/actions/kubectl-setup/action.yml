@@ -1,0 +1,10 @@
+name: "Kubectl Setup from KUBECONFIG_B64"
+inputs:
+  kubeconfig_b64: { required: true }
+runs:
+  using: "composite"
+  steps:
+    - shell: bash
+      run: |
+        echo "${{ inputs.kubeconfig_b64 }}" | base64 -d > kubeconfig
+        echo "KUBECONFIG=$PWD/kubeconfig" >> $GITHUB_ENV

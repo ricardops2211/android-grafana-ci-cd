@@ -1,0 +1,11 @@
+name: "Loki Port-Forward"
+inputs:
+  namespace: { required: true, default: "observability" }
+runs:
+  using: "composite"
+  steps:
+    - shell: bash
+      run: |
+        kubectl -n "${{ inputs.namespace }}" port-forward svc/loki 3100:3100 >/tmp/pf.log 2>&1 &
+        echo $! > /tmp/pf.pid
+        sleep 3

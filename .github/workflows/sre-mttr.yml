@@ -1,0 +1,150 @@
+name: sre-mttr-loki
+on:
+  push:
+    branches: [ "sre-richie" ]
+  workflow_dispatch:
+    inputs:
+      chaos_minutes: { description: "Duración falla (min)", required: true, default: "2" }
+      mttr_slo_seconds: { description: "SLO MTTR (s)", required: true, default: "300" }
+
+concurrency:
+  group: sre-mttr-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  mttr-lab:
+    runs-on: self-hosted
+    env:
+      NAMESPACE: sre-demo
+      DEPLOYMENT: api-demo
+      APP_LABEL: api-demo
+      RUN_ID: ${{ github.run_id }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: kubectl setup
+        uses: ./.github/actions/kubectl-setup
+        with:
+          kubeconfig_b64: ${{ secrets.KUBECONFIG_B64 }}
+
+      - name: helm repos & namespaces
+        shell: bash
+        run: |
+          helm repo add grafana https://grafana.github.io/helm-charts
+          helm repo add prometheus-community https://prometheus-community.github.io/helm-charts
+          helm repo update
+          kubectl get ns observability >/dev/null 2>&1 || kubectl create ns observability
+          kubectl get ns monitoring   >/dev/null 2>&1 || kubectl create ns monitoring
+          kubectl get ns $NAMESPACE   >/dev/null 2>&1 || kubectl create ns $NAMESPACE
+
+      # (OPCIONAL pero recomendado en push): reconstruir y cargar imagen si cambió el código
+      - name: Build & load app image
+        shell: bash
+        run: |
+          docker build -t api-demo:local ./app
+          kind load docker-image api-demo:local --name sre-demo
+
+      - name: install kube-prometheus-stack (AM/Prom)
+        env: { SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }} }
+        shell: bash
+        run: |
+          sudo apt-get update && sudo apt-get install -y gettext-base
+          (cd k8s && envsubst < monitoring-values.yaml > monitoring-values.rendered.yaml)
+          helm upgrade --install kps prometheus-community/kube-prometheus-stack -n monitoring -f k8s/monitoring-values.rendered.yaml
+          kubectl -n monitoring rollout status statefulset/kube-prometheus-stack-prometheus --timeout=600s
+          kubectl -n monitoring rollout status statefulset/alertmanager-kube-prometheus-stack-alertmanager --timeout=600s
+
+      - name: install loki/promtail/grafana
+        shell: bash
+        run: |
+          helm upgrade --install loki grafana/loki -n observability -f k8s/loki-values.yaml
+          helm upgrade --install promtail grafana/promtail -n observability -f k8s/promtail-values.yaml
+          helm upgrade --install grafana grafana/grafana -n observability -f k8s/grafana-values.yaml
+          kubectl -n observability rollout status deploy/grafana --timeout=600s
+
+      - name: deploy app
+        shell: bash
+        run: |
+          kubectl apply -f k8s/deployment.yaml
+          kubectl -n $NAMESPACE rollout status deploy/$DEPLOYMENT --timeout=300s
+
+      - name: apply Grafana dashboard (ConfigMap sidecar)
+        shell: bash
+        run: |
+          awk 'BEGIN{print "apiVersion: v1\nkind: ConfigMap\nmetadata:\n  name: dashboard-mttr\n  namespace: observability\n  labels:\n    grafana_dashboard: \"1\"\ndata:\n  sre-mttr-loki.json: |"} {print "    "$0}' k8s/grafana-dashboard-mttr.json > k8s/grafana-dashboard-configmap.yaml
+          kubectl -n observability apply -f k8s/grafana-dashboard-configmap.yaml
+
+      - name: port-forward loki
+        uses: ./.github/actions/loki-port-forward
+        with:
+          namespace: observability
+
+      - name: incident start
+        id: start
+        uses: ./.github/actions/loki-push
+        with:
+          type: incident_start
+          run_id: ${{ env.RUN_ID }}
+          app: ${{ env.APP_LABEL }}
+          message: "incident start caused_by=chaos"
+
+      - name: chaos on
+        uses: ./.github/actions/chaos-toggle
+        with:
+          namespace: ${{ env.NAMESPACE }}
+          deployment: ${{ env.DEPLOYMENT }}
+          fail_rate: "1.0"
+
+      - name: hold chaos
+        run: sleep $((60 * ${{ github.event.inputs.chaos_minutes || 2 }}))
+
+      - name: chaos off
+        uses: ./.github/actions/chaos-toggle
+        with:
+          namespace: ${{ env.NAMESPACE }}
+          deployment: ${{ env.DEPLOYMENT }}
+          fail_rate: "0.0"
+
+      - name: wait stable
+        uses: ./.github/actions/wait-stable
+        with:
+          namespace: ${{ env.NAMESPACE }}
+          app_label: ${{ env.APP_LABEL }}
+
+      - name: incident end
+        id: end
+        uses: ./.github/actions/loki-push
+        with:
+          type: incident_end
+          run_id: ${{ env.RUN_ID }}
+          app: ${{ env.APP_LABEL }}
+          message: "incident end status=recovered"
+
+      - name: calc MTTD/MTTR
+        id: calc
+        uses: ./.github/actions/loki-calc-mttr
+        with:
+          start_ns: ${{ steps.start.outputs.ts_ns }}
+          end_ns: ${{ steps.end.outputs.ts_ns }}
+          query_error: '{app="${{ env.APP_LABEL }}"} |= "ERROR"'
+
+      - name: upload report
+        uses: ./.github/actions/upload-report
+        with:
+          run_id: ${{ env.RUN_ID }}
+          mttr_seconds: ${{ steps.calc.outputs.mttr_seconds }}
+          mttd_seconds: ${{ steps.calc.outputs.mttd_seconds }}
+
+      - name: enforce SLO
+        uses: ./.github/actions/enforce-slo
+        with:
+          mttr_seconds: ${{ steps.calc.outputs.mttr_seconds }}
+          slo_seconds: ${{ github.event.inputs.mttr_slo_seconds || 300 }}
+
+      - name: cleanup port-forward
+        if: always()
+        run: pkill -f "port-forward.*svc/loki" || true

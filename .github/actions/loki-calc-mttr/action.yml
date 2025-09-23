@@ -1,0 +1,17 @@
+name: "Loki Calc MTTR"
+inputs: { start_ns: {required: true}, end_ns: {required: true}, query_error: {required: true} }
+outputs: { mttd_seconds: {description:"mttd"}, mttr_seconds: {description:"mttr"} }
+runs:
+  using: "composite"
+  steps:
+    - id: calc
+      shell: bash
+      env: { LOKI_URL: http://127.0.0.1:3100/loki/api/v1 }
+      run: |
+        START_NS="${{ inputs.start_ns }}"; END_NS="${{ inputs.end_ns }}"
+        RES=$(curl -sG "$LOKI_URL/query_range" --data-urlencode "query=${{ inputs.query_error }}" --data-urlencode "start=$START_NS" --data-urlencode "end=$END_NS" --data-urlencode "limit=1")
+        FIRST_ERR_NS=$(echo "$RES" | jq -r '.data.result[0].values[0][0]' 2>/dev/null || echo "")
+        if [ -z "$FIRST_ERR_NS" ] || [ "$FIRST_ERR_NS" = "null" ]; then MTTD=0; else MTTD=$(( (FIRST_ERR_NS - START_NS)/1000000000 )); fi
+        MTTR=$(( (END_NS - START_NS)/1000000000 ))
+        echo "mttd_seconds=$MTTD" >> $GITHUB_OUTPUT
+        echo "mttr_seconds=$MTTR" >> $GITHUB_OUTPUT

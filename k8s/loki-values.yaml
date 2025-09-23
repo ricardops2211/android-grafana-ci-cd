@@ -1,0 +1,28 @@
+loki:
+  auth_enabled: false
+  server: { http_listen_port: 3100 }
+  commonConfig: { replication_factor: 1 }
+  storage: { type: filesystem }
+  schemaConfig:
+    configs:
+      - from: 2020-10-15
+        store: boltdb-shipper
+        object_store: filesystem
+        schema: v13
+        index: { prefix: index_, period: 24h }
+
+ruler:
+  enabled: true
+  alertmanagerUrl: "http://kube-prometheus-stack-alertmanager.monitoring.svc:9093"
+  config:
+    groups:
+      - name: sre-loki-rules
+        rules:
+          - alert: HighErrorRate
+            expr: |
+              sum by (app) (rate({app="api-demo"} |= "ERROR"[5m])) > 0.1
+            for: 2m
+            labels: { severity: page }
+            annotations:
+              summary: "High error rate in {{ $labels.app }}"
+              description: "Elevated errors detected by Loki logs."

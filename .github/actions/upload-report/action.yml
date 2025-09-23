@@ -1,0 +1,15 @@
+name: "Upload MTTR Report"
+inputs: { run_id: {required: true}, mttr_seconds: {required: true}, mttd_seconds: {required: true} }
+runs:
+  using: "composite"
+  steps:
+    - shell: bash
+      run: |
+        echo -e "run_id,mttr_s,mttd_s\n${{ inputs.run_id }},${{ inputs.mttr_seconds }},${{ inputs.mttd_seconds }}" > mttr.csv
+        echo -e "{ \"run_id\": \"${{ inputs.run_id }}\", \"mttr\": ${{ inputs.mttr_seconds }}, \"mttd\": ${{ inputs.mttd_seconds }} }" > mttr.json
+    - uses: actions/upload-artifact@v4
+      with:
+        name: mttr-report
+        path: |
+          mttr.csv
+          mttr.json
