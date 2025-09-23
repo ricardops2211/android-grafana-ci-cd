@@ -13,6 +13,7 @@ jobs:
   tests:
     uses: ./.github/workflows/reusable_android_emulator_test.yml
     with:
+      enable_ui_viewer: true  # cambia a true para ver el emulador (requiere self-hosted con GUI)
       project_dir: '.'   # cambia a 'android' si tu proyecto está en subcarpeta
 
   publish:

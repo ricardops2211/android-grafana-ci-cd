@@ -3,6 +3,9 @@ name: Reusable - Android Emulator Test (Self-Hosted)
 on:
   workflow_call:
     inputs:
+      enable_ui_viewer:
+        type: boolean
+        default: false
       java_version:
         type: string
         default: '17'
@@ -34,6 +37,38 @@ jobs:
         run: |
           echo "Project dir: ${{ inputs.project_dir }}"
           ls -la "${{ inputs.project_dir }}" || true
+
+      # --- (OPCIONAL) Levantar emulador con UI web (noVNC) ---
+      - name: Start Android UI (noVNC) via Docker Compose
+        if: ${{ inputs.enable_ui_viewer }}
+        env:
+          UI_DIR: /home/gha-runner/android-ui
+        run: |
+          set -e
+          mkdir -p "$UI_DIR"
+          # Copiamos el compose versionado en el repo a la ruta de la VM
+          cp -f infra/android-ui/docker-compose.yml "$UI_DIR/docker-compose.yml"
+
+          cd "$UI_DIR"
+          docker compose up -d
+          echo "Waiting for noVNC on :6080..."
+          for i in {1..60}; do
+            curl -sSf http://localhost:6080 >/dev/null 2>&1 && break
+            sleep 2
+          done
+
+          echo "=============================="
+          HOST_IP=$(hostname -I 2>/dev/null | awk '{print $1}')
+          [ -z "$HOST_IP" ] && HOST_IP="localhost"
+          echo "Android UI (noVNC) is up!"
+          echo "Open this in your browser:"
+          echo "  http://$HOST_IP:6080"
+          echo "=============================="
+
+          # Si quisieras que los connected tests usen ESTE emu web:
+          # adb connect "$HOST_IP:5555"
+          # adb devices
+          # echo "ANDROID_SERIAL=$HOST_IP:5555" >> "$GITHUB_ENV"
 
       - uses: actions/setup-java@v4
         with:
@@ -138,3 +173,14 @@ jobs:
             ${{ inputs.project_dir }}/app/build/reports
             ${{ inputs.project_dir }}/app/build/outputs/androidTest-results
             ${{ inputs.project_dir }}/ci/logs/logcat.jsonl
+
+      # --- SIEMPRE apagar UI web si se encendió ---
+      - name: Stop Android UI (noVNC)
+        if: ${{ always() && inputs.enable_ui_viewer }}
+        env:
+          UI_DIR: /home/gha-runner/android-ui
+        run: |
+          set +e
+          cd "$UI_DIR" 2>/dev/null || exit 0
+          docker compose ps || true
+          docker compose down -v || true
