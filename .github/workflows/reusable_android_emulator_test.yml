@@ -44,31 +44,17 @@ jobs:
         env:
           UI_DIR: /home/gha-runner/android-ui
         run: |
-          set -e
           mkdir -p "$UI_DIR"
-          # Copiamos el compose versionado en el repo a la ruta de la VM
           cp -f infra/android-ui/docker-compose.yml "$UI_DIR/docker-compose.yml"
-
           cd "$UI_DIR"
           docker compose up -d
-          echo "Waiting for noVNC on :6080..."
           for i in {1..60}; do
             curl -sSf http://localhost:6080 >/dev/null 2>&1 && break
             sleep 2
           done
+          HOST_IP=$(hostname -I 2>/dev/null | awk '{print $1}'); [ -z "$HOST_IP" ] && HOST_IP="localhost"
+          echo "Open http://$HOST_IP:6080"
 
-          echo "=============================="
-          HOST_IP=$(hostname -I 2>/dev/null | awk '{print $1}')
-          [ -z "$HOST_IP" ] && HOST_IP="localhost"
-          echo "Android UI (noVNC) is up!"
-          echo "Open this in your browser:"
-          echo "  http://$HOST_IP:6080"
-          echo "=============================="
-
-          # Si quisieras que los connected tests usen ESTE emu web:
-          # adb connect "$HOST_IP:5555"
-          # adb devices
-          # echo "ANDROID_SERIAL=$HOST_IP:5555" >> "$GITHUB_ENV"
 
       - uses: actions/setup-java@v4
         with:
