@@ -1,8 +1,8 @@
-<?xml version="1.0" encoding="utf-8"?>
-<resources>
-    <!-- Tema de la app: hereda de Material 3 -->
-    <style name="AppTheme" parent="Theme.Material3.DayNight.NoActionBar">
-        <!-- personalizaciones opcionales -->
-        <item name="android:statusBarColor">?attr/colorPrimary</item>
+<resources xmlns:tools="http://schemas.android.com/tools">
+    <!-- Tema de la app basado en Material 3 -->
+    <style name="Theme.AndroidGrafanaCI" parent="Theme.Material3.DayNight.NoActionBar">
+        <!-- Ejemplos de overrides opcionales -->
+        <item name="android:statusBarColor" tools:targetApi="l">?attr/colorPrimary</item>
+        <item name="android:navigationBarColor" tools:targetApi="o">?attr/colorSurface</item>
     </style>
 </resources>
