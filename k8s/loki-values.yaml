@@ -1,7 +1,9 @@
 deploymentMode: SingleBinary
+
 read:     { replicas: 0 }
 write:    { replicas: 0 }
 backend:  { replicas: 0 }
+
 chunksCache:   { enabled: false }
 resultsCache:  { enabled: false }
 gateway:       { enabled: false }
@@ -12,7 +14,9 @@ loki:
   auth_enabled: false
   server: { http_listen_port: 3100 }
   commonConfig: { replication_factor: 1 }
-  storage: { type: filesystem, filesystem: {} }
+  storage:
+    type: filesystem
+    filesystem: {}
   schemaConfig:
     configs:
       - from: 2020-10-15
