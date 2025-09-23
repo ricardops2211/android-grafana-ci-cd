@@ -69,16 +69,33 @@ jobs:
           docker build -t api-demo:local ./app
           kind load docker-image api-demo:local --name sre-demo
 
-      - name: Install kube-prometheus-stack (AM/Prom)
+      - name: Render monitoring values (Alertmanager Slack)
         env:
           SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
         shell: bash
         run: |
-          sudo apt-get update && sudo apt-get install -y gettext-base
-          (cd k8s && envsubst < monitoring-values.yaml > monitoring-values.rendered.yaml)
-          helm upgrade --install kps prometheus-community/kube-prometheus-stack -n monitoring -f k8s/monitoring-values.rendered.yaml
+          set -euo pipefail
+          if command -v envsubst >/dev/null 2>&1; then
+            RENDER=envsubst
+          elif [ -x ./tools/envsubst ]; then
+            RENDER=./tools/envsubst
+          else
+            echo "ERROR: envsubst no disponible. Instálalo en el host o incluye ./tools/envsubst en el repo." >&2
+            exit 1
+          fi
+          (cd k8s && $RENDER < monitoring-values.yaml > monitoring-values.rendered.yaml)
+          ls -l k8s/monitoring-values.rendered.yaml
+          # aviso si no se inyectó la URL (secret vacío)
+          grep -q "hooks.slack.com" k8s/monitoring-values.rendered.yaml || echo "::warning::No se detectó la URL de Slack"
+
+      - name: Install kube-prometheus-stack (AM/Prom)
+        shell: bash
+        run: |
+          helm upgrade --install kps prometheus-community/kube-prometheus-stack \
+            -n monitoring -f k8s/monitoring-values.rendered.yaml
           kubectl -n monitoring rollout status statefulset/kube-prometheus-stack-prometheus --timeout=600s
           kubectl -n monitoring rollout status statefulset/alertmanager-kube-prometheus-stack-alertmanager --timeout=600s
+
 
       - name: Install Loki/Promtail/Grafana
         shell: bash
