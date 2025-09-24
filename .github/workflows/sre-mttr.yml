@@ -30,7 +30,7 @@ jobs:
         run: |
           set -e
           sudo apt-get update -y
-          sudo apt-get install -y jq curl ca-certificates gnupg
+          sudo apt-get install -y jq curl ca-certificates gnupg gettext-base
           curl -Lo kubectl https://storage.googleapis.com/kubernetes-release/release/$(curl -s https://storage.googleapis.com/kubernetes-release/release/stable.txt)/bin/linux/amd64/kubectl
           chmod +x kubectl && sudo mv kubectl /usr/local/bin/
           curl -Lo kind https://kind.sigs.k8s.io/dl/v0.23.0/kind-linux-amd64
@@ -103,6 +103,7 @@ jobs:
           kubectl -n demo-app rollout status deploy/podinfo --timeout=5m
 
       - name: Inyectar incidente y medir MTTR (publica en Loki Cloud)
+        id: mttr
         run: |
           set -euo pipefail
           NS="demo-app"
@@ -126,6 +127,13 @@ jobs:
           if [ "$MTTR_SEC" -lt 0 ]; then MTTR_SEC=0; fi
           echo "✅ MTTR medido: ${MTTR_SEC}s"
 
+          # Outputs para anotación (ms) y para texto (segundos)
+          START_MS=$((START * 1000))
+          END_MS=$((END * 1000))
+          echo "start_ms=$START_MS" >> $GITHUB_OUTPUT
+          echo "end_ms=$END_MS" >> $GITHUB_OUTPUT
+          echo "mttr_seconds=$MTTR_SEC" >> $GITHUB_OUTPUT
+
           # Publicar el MTTR en Loki Cloud con Basic Auth (tenant+token)
           TS_NS=$(($(date +%s%N)))
           LOG_LINE=$(jq -nc --argjson mttr "$MTTR_SEC" \
@@ -137,3 +145,49 @@ jobs:
             --data "{\"streams\":[{\"stream\":{\"app\":\"podinfo\",\"metric\":\"mttr\"},\"values\":[[\"${TS_NS}\",\"${LOG_LINE}\"]]}]}"
 
           echo "🧭 Busca en Grafana Cloud (Explore→Loki): {app=\"podinfo\",metric=\"mttr\"}"
+
+      - name: Publicar anotación en Grafana Cloud (visible en dashboards gestionados)
+        env:
+          GRAFANA_URL: ${{ secrets.GRAFANA_URL }}            # ej: https://TU_STACK.grafana.net
+          GRAFANA_API_TOKEN: ${{ secrets.GRAFANA_API_TOKEN }}# API key (Editor/Admin)
+          START_MS: ${{ steps.mttr.outputs.start_ms }}
+          END_MS: ${{ steps.mttr.outputs.end_ms }}
+          MTTR_SEC: ${{ steps.mttr.outputs.mttr_seconds }}
+        run: |
+          set -euo pipefail
+
+          RUN_URL="https://github.com/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
+          TEXT="MTTR=${MTTR_SEC}s · Run: ${RUN_URL}"
+
+          # Tags para que sea fácil de filtrar/buscar en dashboards de Grafana Cloud
+          TAGS_JSON='[
+            "grafanacloud",
+            "usage-insights",
+            "cardinality-management",
+            "loki",
+            "mttr",
+            "sre",
+            "alert groups",
+            "grafana-incident",
+            "irm",
+            "insights"
+          ]'
+
+          PAYLOAD=$(jq -nc \
+            --arg text "$TEXT" \
+            --argjson tags "$TAGS_JSON" \
+            --argjson time $START_MS \
+            --argjson timeEnd $END_MS \
+            '{text:$text, tags:$tags, time:$time, timeEnd:$timeEnd}')
+
+          CODE=$(curl -sS -o /tmp/ann.json -w "%{http_code}" \
+            -H "Authorization: Bearer ${GRAFANA_API_TOKEN}" \
+            -H "Content-Type: application/json" \
+            -X POST "${GRAFANA_URL}/api/annotations" \
+            --data "${PAYLOAD}")
+
+          if [ "$CODE" -ge 200 ] && [ "$CODE" -lt 300 ]; then
+            echo "✅ Anotación creada"; cat /tmp/ann.json
+          else
+            echo "❌ Falló la anotación (HTTP $CODE)"; cat /tmp/ann.json; exit 1
+          fi
