@@ -199,14 +199,23 @@ jobs:
 
           echo "✅ Anotación creada correctamente."
 
-      - name: Publicar URL de dashboard (Python)
+      - name: Ajustar dashboard automáticamente (datasource + queries + rango)
         shell: bash
         env:
           GRAFANA_URL: https://ricardops2211.grafana.net
           GC_GRAFANA_API_TOKEN: ${{ secrets.GC_GRAFANA_API_TOKEN }}
-          DASHBOARD_UID: sre-mttr-lab
-          DASHBOARD_TITLE: "SRE MTTR Lab"
-          DASHBOARD_JSON: dashboards/mttr_grafana.json
-        run: python3 scripts/provision_dashboard.py
+          DASHBOARD_UID: richie-sre-mttr-lab
+          DASHBOARD_TITLE: "RICHIE SRE MTTR Lab"
+          # Usa el NOMBRE EXACTO de tu datasource Loki en Grafana:
+          LOKI_DS_NAME: grafanacloud-ricardops2211-logs
+          # Filtros opcionales (si tu push usa estas labels)
+          LABEL_APP: podinfo
+          LABEL_ENV: ci
+          # Rango por defecto del dashboard
+          DEFAULT_FROM: now-24h
+          DEFAULT_TO: now
+        run: |
+          python3 scripts/adjust_dashboard.py
+
 
 
