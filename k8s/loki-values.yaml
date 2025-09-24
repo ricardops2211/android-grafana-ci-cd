@@ -1,9 +1,11 @@
 canary:
   enabled: false
 
+# Evita que la chart exija helm test/canary
 test:
-  enabled: false  # <<--- IMPORTANTE
+  enabled: false
 
+# Monta /var/loki efímero (EmptyDir). Cambia a PVC si quieres persistencia real.
 singleBinary:
   extraVolumeMounts:
     - name: data
@@ -13,27 +15,52 @@ singleBinary:
       emptyDir: {}
 
 loki:
-  useTestSchema: true
-  structuredConfig:
+  # Config clásica soportada por la chart
+  config: |
     server:
       http_listen_port: 3100
+
     common:
       replication_factor: 1
       ring:
         kvstore:
           store: memberlist
+
     memberlist:
       abort_if_cluster_join_fails: false
       join_members:
         - loki-memberlist
+
     analytics:
       enabled: false
       reporting_enabled: false
+
     ingester:
       wal:
         enabled: true
         dir: /var/loki/wal
+
     query_scheduler:
       ring:
         kvstore:
           store: memberlist
+
+    # Almacenamiento local + boltdb-shipper (ideal para kind/dev)
+    storage_config:
+      boltdb_shipper:
+        active_index_directory: /var/loki/index
+        cache_location: /var/loki/boltdb-cache
+        shared_store: filesystem
+      filesystem:
+        directory: /var/loki/chunks
+
+    # *** IMPORTANTE: schema_config explícito ***
+    schema_config:
+      configs:
+        - from: "2024-01-01"
+          store: boltdb-shipper
+          object_store: filesystem
+          schema: v13
+          index:
+            prefix: loki_index_
+            period: 24h

@@ -53,18 +53,19 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          helm repo add grafana https://grafana.github.io/helm-charts
-          helm repo add prometheus-community https://prometheus-community.github.io/helm-charts
+          helm repo add grafana https://grafana.github.io/helm-charts || true
+          helm repo add prometheus-community https://prometheus-community.github.io/helm-charts || true
           helm repo update
           kubectl get ns observability >/dev/null 2>&1 || kubectl create ns observability
           kubectl get ns monitoring   >/dev/null 2>&1 || kubectl create ns monitoring
           kubectl get ns $NAMESPACE   >/dev/null 2>&1 || kubectl create ns $NAMESPACE
 
+
       - name: Render Loki & server dry-run
         shell: bash
         env:
           NS: observability
-          VALUES: k8s/loki-values.yaml
+          VALUES: /tmp/loki-values.yaml
         run: |
           set -euo pipefail
           helm template loki grafana/loki -n "$NS" -f "$VALUES" | tee /tmp/loki-render.yaml
@@ -74,32 +75,29 @@ jobs:
           kubectl -n "$NS" apply --dry-run=server -f /tmp/loki-render.yaml
 
       - name: Install/Upgrade Loki & wait
+        id: loki_install
         shell: bash
         env:
           NS: observability
-          VALUES: k8s/loki-values.yaml
+          VALUES: /tmp/loki-values.yaml
         run: |
           set -euo pipefail
           helm upgrade --install loki grafana/loki -n "$NS" -f "$VALUES" --wait --timeout 5m
+          kubectl -n "$NS" wait --for=condition=Ready --timeout=300s pod -l app.kubernetes.io/name=loki
+          echo "ok=true" >> "$GITHUB_OUTPUT"
 
-
-      # === NO instala Loki/Promtail/Grafana: solo verifica Loki ya desplegado en el clúster ===
-      - name: Check Loki on cluster (no install)
-        id: loki_ready
+      # (opcional) imprime info útil si algo va mal en pasos siguientes
+      - name: Loki diagnostics (only on failure so far)
+        if: failure() && steps.loki_install.outputs.ok == 'true'
         shell: bash
         run: |
           set -euo pipefail
-          if kubectl -n observability wait --for=condition=Ready --timeout=240s pod -l app.kubernetes.io/name=loki; then
-            echo "ok=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "ok=false" >> "$GITHUB_OUTPUT"
-            echo "---- Pods Loki ----"
-            kubectl -n observability get po -l app.kubernetes.io/name=loki -o wide || true
-            echo "---- Describe Loki ----"
-            kubectl -n observability describe po -l app.kubernetes.io/name=loki || true
-            echo "---- Logs Loki (tail) ----"
-            kubectl -n observability logs -l app.kubernetes.io/name=loki --tail=200 || true
-          fi
+          echo "---- Pods Loki ----"
+          kubectl -n observability get po -l app.kubernetes.io/name=loki -o wide || true
+          echo "---- Describe Loki ----"
+          kubectl -n observability describe po -l app.kubernetes.io/name=loki || true
+          echo "---- Logs Loki (tail) ----"
+          kubectl -n observability logs -l app.kubernetes.io/name=loki --tail=200 || true
 
       - name: Deploy app
         shell: bash
@@ -115,9 +113,8 @@ jobs:
           awk 'BEGIN{print "apiVersion: v1\nkind: ConfigMap\nmetadata:\n  name: dashboard-mttr\n  namespace: observability\n  labels:\n    grafana_dashboard: \"1\"\ndata:\n  sre-mttr-loki.json: |"} {print "    "$0}' k8s/grafana-dashboard-mttr.json > k8s/grafana-dashboard-configmap.yaml
           kubectl -n observability apply -f k8s/grafana-dashboard-configmap.yaml
 
-      # === Solo si Loki está OK ===
+      # === Port-forward para usar loki en los pasos siguientes ===
       - name: Port-forward Loki (inline)
-        if: ${{ steps.loki_ready.outputs.ok == 'true' }}
         shell: bash
         run: |
           set -euo pipefail
@@ -127,10 +124,9 @@ jobs:
             curl -fsS http://127.0.0.1:3100/ready >/dev/null && break
             sleep 1
           done
-          curl -fsS http://127.0.0.1:3100/ready >/dev/null || (echo "Loki /ready no responde"; exit 1)
+          curl -fsS http://127.0.0.1:3100/ready >/dev/null || (echo "Loki /ready no responde"; cat /tmp/pf.log || true; exit 1)
 
       - name: Incident start
-        if: ${{ steps.loki_ready.outputs.ok == 'true' }}
         id: start
         uses: ./.github/actions/loki-push
         with:
@@ -168,7 +164,6 @@ jobs:
           app_label: ${{ env.APP_LABEL }}
 
       - name: Incident end
-        if: ${{ steps.loki_ready.outputs.ok == 'true' }}
         id: end
         uses: ./.github/actions/loki-push
         with:
@@ -179,7 +174,6 @@ jobs:
           loki_url: "http://127.0.0.1:3100"
 
       - name: Calcular MTTD/MTTR
-        if: ${{ steps.loki_ready.outputs.ok == 'true' }}
         id: calc
         uses: ./.github/actions/loki-calc-mttr
         with:
@@ -189,7 +183,6 @@ jobs:
           loki_url: "http://127.0.0.1:3100"
 
       - name: Upload report
-        if: ${{ steps.loki_ready.outputs.ok == 'true' }}
         uses: ./.github/actions/upload-report
         with:
           run_id:       ${{ env.RUN_ID }}
@@ -197,7 +190,6 @@ jobs:
           mttd_seconds: ${{ steps.calc.outputs.mttd_seconds }}
 
       - name: Enforce SLO
-        if: ${{ steps.loki_ready.outputs.ok == 'true' }}
         uses: ./.github/actions/enforce-slo
         with:
           mttr_seconds: ${{ steps.calc.outputs.mttr_seconds }}
