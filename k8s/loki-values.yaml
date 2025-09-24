@@ -1,17 +1,12 @@
-# k8s/loki-values.yaml
-
 deploymentMode: SingleBinary
 
 canary:
   enabled: false
-
 test:
   enabled: false
-
 gateway:
   enabled: false
 
-# 🔹 Solo queremos SingleBinary
 singleBinary:
   replicas: 1
   extraVolumeMounts:
@@ -20,37 +15,14 @@ singleBinary:
   extraVolumes:
     - name: data
       emptyDir: {}
-  readinessProbe:
-    httpGet:
-      path: /ready
-      port: http-metrics
-    initialDelaySeconds: 20
-    periodSeconds: 10
-    failureThreshold: 12
-  livenessProbe:
-    httpGet:
-      path: /ready
-      port: http-metrics
-    initialDelaySeconds: 30
-    periodSeconds: 10
-    failureThreshold: 12
 
-# 🔻 Desactiva completamente el modo Simple Scalable
-read:
-  replicas: 0
-write:
-  replicas: 0
-backend:
-  replicas: 0
-
-# (algunas charts también exponen estos alias; por si acaso, a 0)
-chunksCache:
-  enabled: false
-resultsCache:
-  enabled: false
+# Desactiva microservicios
+read:     { replicas: 0 }
+write:    { replicas: 0 }
+backend:  { replicas: 0 }
 
 loki:
-  useTestSchema: true
+  useTestSchema: false  # usamos schema_config real
   storage:
     use_thanos_objstore: false
     bucketNames:

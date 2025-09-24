@@ -74,15 +74,43 @@ jobs:
           fi
           kubectl -n "$NS" apply --dry-run=server -f /tmp/loki-render.yaml
 
-      - name: Install/Upgrade Loki & wait (atomic, 15m)
+      - name: Install/Upgrade Loki (safe) & wait
         shell: bash
         env:
           NS: observability
           VALUES: k8s/loki-values.yaml
+          RELEASE: loki
         run: |
           set -euo pipefail
-          # instala/actualiza y hace rollback automático si no llega a Ready
-          helm upgrade --install loki grafana/loki -n "$NS" -f "$VALUES" --atomic --timeout 15m
+
+          # 1) Intento de upgrade normal, con atomic + force y más timeout
+          set +e
+          helm upgrade --install "$RELEASE" grafana/loki \
+            -n "$NS" -f "$VALUES" \
+            --atomic --force --timeout 15m
+          rc=$?
+          set -e
+
+          if [ "$rc" -ne 0 ]; then
+            echo "::warning::Helm upgrade falló (probable inmutabilidad del StatefulSet). Reinstalando limpio…"
+
+            # 2) Desinstala la release
+            helm -n "$NS" uninstall "$RELEASE" || true
+
+            # 3) Limpia objetos que puedan haber quedado (sin PVCs porque usas EmptyDir)
+            kubectl -n "$NS" delete sts,ds,deploy,svc,cm,secret,sa,role,rolebinding \
+              -l app.kubernetes.io/instance="$RELEASE" --ignore-not-found
+
+            # 4) Instala fresco
+            helm install "$RELEASE" grafana/loki \
+              -n "$NS" -f "$VALUES" \
+              --wait --timeout 15m
+          fi
+
+          # 5) Espera a que el pod de Loki esté Ready (single-binary)
+          kubectl -n "$NS" wait --for=condition=Ready --timeout=600s \
+            pod -l app.kubernetes.io/name=loki
+
 
       # Diagnóstico si algo sigue sin Ready (sin romper el pipeline hasta aquí)
       - name: Loki diagnostics (pods, describe, logs)
