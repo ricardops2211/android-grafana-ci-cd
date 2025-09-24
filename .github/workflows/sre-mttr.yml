@@ -60,36 +60,28 @@ jobs:
           kubectl get ns monitoring   >/dev/null 2>&1 || kubectl create ns monitoring
           kubectl get ns $NAMESPACE   >/dev/null 2>&1 || kubectl create ns $NAMESPACE
 
-      - name: Build & load app image (on push)
-        if: ${{ github.event_name == 'push' }}
+      - name: Render Loki & server dry-run
         shell: bash
-        run: |
-          set -euo pipefail
-          docker build -t api-demo:local ./app
-          kind load docker-image api-demo:local --name sre-demo
-
-      - name: Render monitoring values (Alertmanager Slack)
         env:
-          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
-        shell: bash
+          NS: observability
+          VALUES: k8s/loki-values.yaml
         run: |
           set -euo pipefail
-          if command -v envsubst >/dev/null 2>&1; then R=envsubst;
-          elif [ -x ./tools/envsubst ]; then R=./tools/envsubst;
-          else echo "ERROR: envsubst no disponible. Incluye tools/envsubst o usa sed." >&2; exit 1; fi
-          (cd k8s && $R < monitoring-values.yaml > monitoring-values.rendered.yaml)
-          grep -q "hooks.slack.com" k8s/monitoring-values.rendered.yaml || echo "::warning::Slack URL no inyectada"
+          helm template loki grafana/loki -n "$NS" -f "$VALUES" | tee /tmp/loki-render.yaml
+          if grep -in 'consul' /tmp/loki-render.yaml; then
+            echo "ERROR: aparece 'consul' en el render"; exit 1
+          fi
+          kubectl -n "$NS" apply --dry-run=server -f /tmp/loki-render.yaml
 
-      - name: Install kube-prometheus-stack (AM/Prom)
+      - name: Install/Upgrade Loki & wait
         shell: bash
+        env:
+          NS: observability
+          VALUES: k8s/loki-values.yaml
         run: |
           set -euo pipefail
-          helm upgrade --install kps prometheus-community/kube-prometheus-stack \
-            -n monitoring -f k8s/monitoring-values.rendered.yaml
-          kubectl -n monitoring wait --for=condition=Available --timeout=600s \
-            prometheus/kps-kube-prometheus-stack-prometheus || true
-          kubectl -n monitoring wait --for=condition=Available --timeout=600s \
-            alertmanager/kps-kube-prometheus-stack-alertmanager || true
+          helm upgrade --install loki grafana/loki -n "$NS" -f "$VALUES" --wait --timeout 5m
+
 
       # === NO instala Loki/Promtail/Grafana: solo verifica Loki ya desplegado en el clúster ===
       - name: Check Loki on cluster (no install)
