@@ -1,4 +1,4 @@
-name: SRE-MTTR-Lab (Grafana Cloud)
+name: SRE-MTTR-Lab-Richie
 
 on:
   push:
