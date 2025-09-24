@@ -1,57 +1,36 @@
-{
-  "uid": "sre-mttr-lab",
-  "title": "SRE MTTR Lab",
-  "schemaVersion": 39,
-  "version": 1,
-  "panels": [
-    {
-      "type": "stat",
-      "title": "MTTR (min) – último",
-      "gridPos": { "x": 0, "y": 0, "w": 6, "h": 4 },
-      "options": { "reduceOptions": { "calcs": ["lastNotNull"], "values": false } },
-      "targets": [
-        {
-          "datasource": { "type": "loki" },
-          "expr": "last_over_time(( {app=\"podinfo\", metric=\"mttr\"} | json | unwrap mttr_seconds )[ $__interval ]) / 60"
-        }
-      ],
-      "fieldConfig": { "defaults": { "unit": "m" }, "overrides": [] }
-    },
-    {
-      "type": "timeseries",
-      "title": "MTTR por incidente (min)",
-      "gridPos": { "x": 6, "y": 0, "w": 18, "h": 8 },
-      "targets": [
-        {
-          "datasource": { "type": "loki" },
-          "expr": "( {app=\"podinfo\", metric=\"mttr\"} | json | unwrap mttr_seconds ) / 60"
-        }
-      ],
-      "fieldConfig": { "defaults": { "unit": "m" }, "overrides": [] }
-    },
-    {
-      "type": "piechart",
-      "title": "Incidentes por env (24h)",
-      "gridPos": { "x": 0, "y": 8, "w": 8, "h": 8 },
-      "targets": [
-        {
-          "datasource": { "type": "loki" },
-          "expr": "sum by (env) ( count_over_time({metric=\"mttr\"}[24h]) )"
-        }
-      ],
-      "options": {
-        "legend": { "displayMode": "list", "placement": "right" },
-        "reduceOptions": { "calcs": ["lastNotNull"] }
-      }
-    },
-    {
-      "type": "logs",
-      "title": "Logs MTTR (crudos)",
-      "gridPos": { "x": 8, "y": 8, "w": 16, "h": 8 },
-      "targets": [
-        { "datasource": { "type": "loki" }, "expr": "{app=\"podinfo\", metric=\"mttr\"}" }
-      ]
-    }
-  ],
-  "time": { "from": "now-24h", "to": "now" }
-}
+[
+  {
+    "type": "stat",
+    "title": "MTTR (min) – último",
+    "gridPos": { "x": 0, "y": 0, "w": 6, "h": 4 },
+    "options": { "reduceOptions": { "calcs": ["lastNotNull"], "values": false } },
+    "targets": [
+      { "datasource": { "type": "loki" }, "expr": "max_over_time(( {metric=\"mttr\"} | json | unwrap mttr_seconds )[1h]) / 60" }
+    ],
+    "fieldConfig": { "defaults": { "unit": "m" }, "overrides": [] }
+  },
+  {
+    "type": "timeseries",
+    "title": "MTTR por incidente (min)",
+    "gridPos": { "x": 6, "y": 0, "w": 18, "h": 8 },
+    "targets": [
+      { "datasource": { "type": "loki" }, "expr": "( {metric=\"mttr\"} | json | unwrap mttr_seconds ) / 60" }
+    ],
+    "fieldConfig": { "defaults": { "unit": "m" }, "overrides": [] }
+  },
+  {
+    "type": "piechart",
+    "title": "Incidentes por env (24h)",
+    "gridPos": { "x": 0, "y": 8, "w": 8, "h": 8 },
+    "targets": [
+      { "datasource": { "type": "loki" }, "expr": "sum by (env) ( count_over_time({metric=\"mttr\"}[24h]) )" }
+    ],
+    "options": { "legend": { "displayMode": "list", "placement": "right" }, "reduceOptions": { "calcs": ["lastNotNull"] } }
+  },
+  {
+    "type": "logs",
+    "title": "Logs MTTR (crudos)",
+    "gridPos": { "x": 8, "y": 8, "w": 16, "h": 8 },
+    "targets": [ { "datasource": { "type": "loki" }, "expr": "{metric=\"mttr\"}" } ]
+  }
+]
