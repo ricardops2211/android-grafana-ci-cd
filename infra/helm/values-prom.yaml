@@ -1,0 +1,18 @@
+grafana:
+  enabled: false        # ya no instalamos Grafana en el cluster
+
+alertmanager:
+  enabled: true
+
+prometheus:
+  prometheusSpec:
+    retention: 4h
+    remoteWrite:
+      - url: "${GC_PROM_URL}"
+        basicAuth:
+          username:
+            name: grafana-cloud-metrics
+            key: username
+          password:
+            name: grafana-cloud-metrics
+            key: password

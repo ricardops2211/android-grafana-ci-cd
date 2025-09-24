@@ -1,0 +1,21 @@
+loki:
+  enabled: false           # no levantamos Loki en el cluster
+
+promtail:
+  enabled: true
+  config:
+    clients:
+      - url: "${GC_LOKI_URL}"
+        basic_auth:
+          username: "${GC_LOKI_USERNAME}"
+          password: "${GC_LOKI_PASSWORD}"
+    scrape_configs:
+      - job_name: kubernetes-pods
+        pipeline_stages:
+          - cri: {}
+        kubernetes_sd_configs:
+          - role: pod
+        relabel_configs:
+          - action: keep
+            source_labels: [__meta_kubernetes_pod_label_app]
+            regex: podinfo|kube.*

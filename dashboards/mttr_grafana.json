@@ -1,0 +1,75 @@
+{
+  "title": "SRE MTTR Lab",
+  "timezone": "browser",
+  "schemaVersion": 39,
+  "version": 1,
+  "panels": [
+    {
+      "type": "stat",
+      "title": "MTTR (min)",
+      "gridPos": { "x": 0, "y": 0, "w": 6, "h": 4 },
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false } },
+      "targets": [
+        {
+          "datasource": { "type": "loki", "uid": "Loki" },
+          "expr": "{app=\"podinfo\", metric=\"mttr\"} | unwrap mttr_seconds | last_over_time(mttr_seconds[$__interval])",
+          "refId": "A"
+        }
+      ],
+      "transformations": [
+        {
+          "id": "calculateField",
+          "options": {
+            "mode": "reduceRow",
+            "replaceFields": true,
+            "reduce": { "reducer": "lastNotNull" },
+            "alias": "MTTR (min)",
+            "binary": {
+              "left": "mttr_seconds",
+              "operator": "/",
+              "right": 60
+            }
+          }
+        }
+      ]
+    },
+    {
+      "type": "stat",
+      "title": "Incidentes resueltos (24h)",
+      "gridPos": { "x": 6, "y": 0, "w": 6, "h": 4 },
+      "options": { "reduceOptions": { "calcs": ["sum"], "fields": "", "values": false } },
+      "targets": [
+        {
+          "datasource": { "type": "loki", "uid": "Loki" },
+          "expr": "{app=\"podinfo\", metric=\"mttr\"} | unwrap incidents_resolved | sum()",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "Disponibilidad (app:podinfo:availability)",
+      "gridPos": { "x": 0, "y": 4, "w": 12, "h": 8 },
+      "targets": [
+        {
+          "datasource": { "type": "prometheus", "uid": "Prometheus" },
+          "expr": "app:podinfo:availability",
+          "legendFormat": "availability",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "type": "logs",
+      "title": "Logs MTTR (Loki)",
+      "gridPos": { "x": 0, "y": 12, "w": 12, "h": 8 },
+      "targets": [
+        {
+          "datasource": { "type": "loki", "uid": "Loki" },
+          "expr": "{app=\"podinfo\", metric=\"mttr\"}"
+        }
+      ]
+    }
+  ],
+  "time": { "from": "now-24h", "to": "now" }
+}

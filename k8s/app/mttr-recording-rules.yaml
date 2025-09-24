@@ -1,0 +1,21 @@
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: mttr-rules
+  namespace: monitoring
+spec:
+  groups:
+    - name: mttr.rules
+      rules:
+        # "up" de endpoints podinfo (si 0 => caída)
+        - record: app:podinfo:availability
+          expr: avg by (job, namespace) (up{job="kubernetes-pods", namespace="demo-app"})
+        # incidente si disponibilidad < 1
+        - alert: PodinfoDown
+          expr: app:podinfo:availability < 1
+          for: 1m
+          labels:
+            severity: critical
+          annotations:
+            summary: "Podinfo down (availability < 1)"
+            description: "At least one pod is not ready in namespace demo-app"

@@ -1,232 +1,68 @@
-name: sre-mttr-loki
-
+name: SRE-MTTR-Lab (Grafana Cloud)
 on:
   push:
-    branches: [ "sre-richie" ]
-  workflow_dispatch:
-    inputs:
-      chaos_minutes:
-        description: "Duración falla (min)"
-        required: false
-        default: "2"
-      mttr_slo_seconds:
-        description: "SLO MTTR (s)"
-        required: false
-        default: "300"
-
-concurrency:
-  group: sre-mttr-${{ github.ref }}
-  cancel-in-progress: true
-
-permissions:
-  contents: read
+    branches: [ "nuevo-sre-richie" ]
 
 jobs:
-  mttr-lab:
-    runs-on: self-hosted
+  lab:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
     env:
-      NAMESPACE: sre-demo
-      DEPLOYMENT: api-demo
-      APP_LABEL: api-demo
-      RUN_ID: ${{ github.run_id }}
+      GC_PROM_URL: ${{ secrets.GC_PROM_URL }}
+      GC_LOKI_URL: ${{ secrets.GC_LOKI_URL }}
+      GC_LOKI_USERNAME: ${{ secrets.GC_LOKI_USERNAME }}
+      GC_LOKI_PASSWORD: ${{ secrets.GC_LOKI_PASSWORD }}
 
     steps:
       - uses: actions/checkout@v4
 
-      - name: Set defaults for chaos & SLO
-        id: defs
-        shell: bash
-        run: |
-          CHAOS="${{ github.event.inputs.chaos_minutes }}"
-          SLO="${{ github.event.inputs.mttr_slo_seconds }}"
-          [ -z "$CHAOS" ] && CHAOS=2
-          [ -z "$SLO" ] && SLO=300
-          echo "chaos=$CHAOS" >> "$GITHUB_OUTPUT"
-          echo "slo=$SLO"   >> "$GITHUB_OUTPUT"
+      # instalar kind/kubectl/helm (igual que antes) y crear cluster Kind…
 
-      - name: kubectl setup
-        uses: ./.github/actions/kubectl-setup
-        with:
-          kubeconfig_b64: ${{ secrets.KUBECONFIG_B64 }}
-
-      - name: Helm repos & namespaces
-        shell: bash
+      - name: Namespaces
         run: |
-          set -euo pipefail
-          helm repo add grafana https://grafana.github.io/helm-charts || true
-          helm repo add prometheus-community https://prometheus-community.github.io/helm-charts || true
+          kubectl create ns monitoring || true
+          kubectl create ns demo-app || true
+
+      - name: Secret credenciales Grafana Cloud (Prometheus)
+        run: |
+          kubectl -n monitoring delete secret grafana-cloud-metrics || true
+          kubectl -n monitoring create secret generic grafana-cloud-metrics \
+            --from-literal=username='${{ secrets.GC_PROM_USERNAME }}' \
+            --from-literal=password='${{ secrets.GC_PROM_PASSWORD }}'
+
+      - name: Agregar repos Helm
+        run: |
+          helm repo add grafana https://grafana.github.io/helm-charts
+          helm repo add prometheus-community https://prometheus-community.github.io/helm-charts
           helm repo update
-          kubectl get ns observability >/dev/null 2>&1 || kubectl create ns observability
-          kubectl get ns monitoring   >/dev/null 2>&1 || kubectl create ns monitoring
-          kubectl get ns $NAMESPACE   >/dev/null 2>&1 || kubectl create ns $NAMESPACE
 
+      - name: Instalar kube-prometheus-stack (con remote_write)
+        run: |
+          # Sustituimos variables dentro del values con envsubst (sólo URL)
+          envsubst < infra/helm/values-prom.yaml > /tmp/values-prom.evaluated.yaml
+          helm upgrade --install monitoring prometheus-community/kube-prometheus-stack \
+            -n monitoring -f /tmp/values-prom.evaluated.yaml \
+            --wait --timeout 15m
 
-      - name: Render Loki & server dry-run
-        shell: bash
+      - name: Instalar Promtail apuntando a Grafana Cloud Loki
+        run: |
+          envsubst < infra/helm/values-loki.yaml > /tmp/values-loki.evaluated.yaml
+          helm upgrade --install loki grafana/loki-stack \
+            -n monitoring -f /tmp/values-loki.evaluated.yaml \
+            --set loki.enabled=false \
+            --wait --timeout 10m
+
+      - name: Desplegar app y reglas/alertas
+        run: |
+          kubectl apply -f k8s/app/podinfo.yaml
+          kubectl apply -f k8s/alerts/mttr-recording-rules.yaml
+
+      - name: Inyectar incidente y medir MTTR (publica en Loki Cloud)
         env:
-          NS: observability
-          VALUES: k8s/loki-values.yaml
+          GC_LOKI_URL: ${{ secrets.GC_LOKI_URL }}
+          GC_LOKI_USERNAME: ${{ secrets.GC_LOKI_USERNAME }}
+          GC_LOKI_PASSWORD: ${{ secrets.GC_LOKI_PASSWORD }}
         run: |
-          set -euo pipefail
-          helm template loki grafana/loki -n "$NS" -f "$VALUES" > /tmp/loki-render.yaml
-          if grep -in 'consul' /tmp/loki-render.yaml; then
-            echo "ERROR: aparece 'consul' en el render"; exit 1
-          fi
-          kubectl -n "$NS" apply --dry-run=server -f /tmp/loki-render.yaml
-
-      - name: Install/Upgrade Loki (safe) & wait
-        shell: bash
-        env:
-          NS: observability
-          VALUES: k8s/loki-values.yaml
-          RELEASE: loki
-        run: |
-          set -euo pipefail
-
-          # 1) Intento de upgrade normal, con atomic + force y más timeout
-          set +e
-          helm upgrade --install "$RELEASE" grafana/loki \
-            -n "$NS" -f "$VALUES" \
-            --atomic --force --timeout 15m
-          rc=$?
-          set -e
-
-          if [ "$rc" -ne 0 ]; then
-            echo "::warning::Helm upgrade falló (probable inmutabilidad del StatefulSet). Reinstalando limpio…"
-
-            # 2) Desinstala la release
-            helm -n "$NS" uninstall "$RELEASE" || true
-
-            # 3) Limpia objetos que puedan haber quedado (sin PVCs porque usas EmptyDir)
-            kubectl -n "$NS" delete sts,ds,deploy,svc,cm,secret,sa,role,rolebinding \
-              -l app.kubernetes.io/instance="$RELEASE" --ignore-not-found
-
-            # 4) Instala fresco
-            helm install "$RELEASE" grafana/loki \
-              -n "$NS" -f "$VALUES" \
-              --wait --timeout 15m
-          fi
-
-          # 5) Espera a que el pod de Loki esté Ready (single-binary)
-          kubectl -n "$NS" wait --for=condition=Ready --timeout=600s \
-            pod -l app.kubernetes.io/name=loki
-
-
-      # Diagnóstico si algo sigue sin Ready (sin romper el pipeline hasta aquí)
-      - name: Loki diagnostics (pods, describe, logs)
-        if: always()
-        shell: bash
-        run: |
-          set -euo pipefail
-          echo "---- Pods Loki ----"
-          kubectl -n observability get po -l app.kubernetes.io/name=loki -o wide || true
-          echo "---- Describe Loki ----"
-          kubectl -n observability describe po -l app.kubernetes.io/name=loki || true
-          echo "---- Logs Loki (tail) ----"
-          kubectl -n observability logs -l app.kubernetes.io/name=loki --tail=200 || true
-
-
-      - name: Deploy app
-        shell: bash
-        run: |
-          set -euo pipefail
-          kubectl apply -f k8s/deployment.yaml
-          kubectl -n $NAMESPACE rollout status deploy/$DEPLOYMENT --timeout=300s
-
-      - name: Apply Grafana dashboard (ConfigMap sidecar)
-        shell: bash
-        run: |
-          set -euo pipefail
-          awk 'BEGIN{print "apiVersion: v1\nkind: ConfigMap\nmetadata:\n  name: dashboard-mttr\n  namespace: observability\n  labels:\n    grafana_dashboard: \"1\"\ndata:\n  sre-mttr-loki.json: |"} {print "    "$0}' k8s/grafana-dashboard-mttr.json > k8s/grafana-dashboard-configmap.yaml
-          kubectl -n observability apply -f k8s/grafana-dashboard-configmap.yaml
-
-      # === Port-forward para usar loki en los pasos siguientes ===
-      - name: Port-forward Loki (inline)
-        shell: bash
-        run: |
-          set -euo pipefail
-          POD=$(kubectl -n observability get pod -l app.kubernetes.io/name=loki -o jsonpath='{.items[0].metadata.name}')
-          kubectl -n observability port-forward pod/"$POD" 3100:3100 >/tmp/pf.log 2>&1 & echo $! >/tmp/pf.pid
-          for i in {1..60}; do
-            curl -fsS http://127.0.0.1:3100/ready >/dev/null && break
-            sleep 1
-          done
-          curl -fsS http://127.0.0.1:3100/ready >/dev/null || (echo "Loki /ready no responde"; cat /tmp/pf.log || true; exit 1)
-
-      - name: Incident start
-        id: start
-        uses: ./.github/actions/loki-push
-        with:
-          type: incident_start
-          run_id: ${{ env.RUN_ID }}
-          app: ${{ env.APP_LABEL }}
-          message: "incident start caused_by=chaos"
-          loki_url: "http://127.0.0.1:3100"
-
-      - name: Chaos ON
-        uses: ./.github/actions/chaos-toggle
-        with:
-          namespace: ${{ env.NAMESPACE }}
-          deployment: ${{ env.DEPLOYMENT }}
-          fail_rate: "1.0"
-
-      - name: Hold chaos
-        shell: bash
-        run: |
-          set -euo pipefail
-          CHAOS=${{ steps.defs.outputs.chaos }}
-          sleep $((60 * CHAOS))
-
-      - name: Chaos OFF
-        uses: ./.github/actions/chaos-toggle
-        with:
-          namespace: ${{ env.NAMESPACE }}
-          deployment: ${{ env.DEPLOYMENT }}
-          fail_rate: "0.0"
-
-      - name: Wait stable
-        uses: ./.github/actions/wait-stable
-        with:
-          namespace: ${{ env.NAMESPACE }}
-          app_label: ${{ env.APP_LABEL }}
-
-      - name: Incident end
-        id: end
-        uses: ./.github/actions/loki-push
-        with:
-          type: incident_end
-          run_id: ${{ env.RUN_ID }}
-          app: ${{ env.APP_LABEL }}
-          message: "incident end status=recovered"
-          loki_url: "http://127.0.0.1:3100"
-
-      - name: Calcular MTTD/MTTR
-        id: calc
-        uses: ./.github/actions/loki-calc-mttr
-        with:
-          start_ns: ${{ steps.start.outputs.ts_ns }}
-          end_ns:   ${{ steps.end.outputs.ts_ns }}
-          query_error: '{app="${{ env.APP_LABEL }}"} |= "ERROR"'
-          loki_url: "http://127.0.0.1:3100"
-
-      - name: Upload report
-        uses: ./.github/actions/upload-report
-        with:
-          run_id:       ${{ env.RUN_ID }}
-          mttr_seconds: ${{ steps.calc.outputs.mttr_seconds }}
-          mttd_seconds: ${{ steps.calc.outputs.mttd_seconds }}
-
-      - name: Enforce SLO
-        uses: ./.github/actions/enforce-slo
-        with:
-          mttr_seconds: ${{ steps.calc.outputs.mttr_seconds }}
-          slo_seconds:  ${{ steps.defs.outputs.slo }}
-
-      - name: Cleanup port-forward
-        if: always()
-        shell: bash
-        run: |
-          if [ -f /tmp/pf.pid ]; then
-            kill "$(cat /tmp/pf.pid)" 2>/dev/null || true
-            rm -f /tmp/pf.pid
-          fi
+          chmod +x scripts/*.sh
+          ./scripts/incident_inject.sh
+          ./scripts/measure_mttr.sh
