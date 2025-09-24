@@ -1,11 +1,9 @@
 canary:
   enabled: false
 
-# Evita que la chart exija helm test/canary
 test:
   enabled: false
 
-# Monta /var/loki efímero (EmptyDir). Cambia a PVC si quieres persistencia real.
 singleBinary:
   extraVolumeMounts:
     - name: data
@@ -14,8 +12,21 @@ singleBinary:
     - name: data
       emptyDir: {}
 
+
 loki:
+  # hace pasar la validación del schema de la chart
   useTestSchema: true
+
+  # la chart ahora mira estos nombres aunque uses filesystem
+  storage:
+    use_thanos_objstore: false
+    bucketNames:
+      chunks: loki-chunks
+      ruler: loki-ruler
+      admin: loki-admin
+      # si la chart pide alguno extra, puedes repetir "loki-<algo>"
+
+  # tu config embebida (sigue igual)
   config: |
     server:
       http_listen_port: 3100
@@ -45,7 +56,7 @@ loki:
         kvstore:
           store: memberlist
 
-    # Almacenamiento local + boltdb-shipper (ideal para kind/dev)
+    # Almacenamiento local + boltdb-shipper (dev/kind)
     storage_config:
       boltdb_shipper:
         active_index_directory: /var/loki/index
@@ -54,7 +65,7 @@ loki:
       filesystem:
         directory: /var/loki/chunks
 
-    # *** IMPORTANTE: schema_config explícito ***
+    # schema explícito (aunque useTestSchema ya desbloquea la validación)
     schema_config:
       configs:
         - from: "2024-01-01"
