@@ -207,6 +207,6 @@ jobs:
           DASHBOARD_UID: sre-mttr-lab
           DASHBOARD_TITLE: "SRE MTTR Lab"
           DASHBOARD_JSON: dashboards/mttr_grafana.json
-        run: python3 scripts/print_dashboard_url.py
+        run: python3 scripts/provision_dashboard.py
 
 
