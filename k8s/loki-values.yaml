@@ -1,32 +1,53 @@
+# --- modo y componentes ---
+deploymentMode: SingleBinary
+
 canary:
   enabled: false
 
 test:
   enabled: false
 
+gateway:
+  enabled: false
+
+# --- pod SingleBinary (1 réplica) ---
 singleBinary:
+  replicas: 1
+  # Monta /var/loki efímero (cámbialo a PVC si quieres persistencia real)
   extraVolumeMounts:
     - name: data
       mountPath: /var/loki
   extraVolumes:
     - name: data
       emptyDir: {}
+  # Readiness menos agresivo para entornos lentos
+  readinessProbe:
+    httpGet:
+      path: /ready
+      port: http-metrics
+    initialDelaySeconds: 20
+    periodSeconds: 10
+    failureThreshold: 12
+  # Liveness básico
+  livenessProbe:
+    httpGet:
+      path: /ready
+      port: http-metrics
+    initialDelaySeconds: 30
+    periodSeconds: 10
+    failureThreshold: 12
 
-
+# --- secciones que la chart valida aunque uses filesystem ---
 loki:
-  # hace pasar la validación del schema de la chart
   useTestSchema: true
-
-  # la chart ahora mira estos nombres aunque uses filesystem
   storage:
     use_thanos_objstore: false
     bucketNames:
       chunks: loki-chunks
       ruler: loki-ruler
       admin: loki-admin
-      # si la chart pide alguno extra, puedes repetir "loki-<algo>"
 
-  # tu config embebida (sigue igual)
+  # Configura Loki (memberlist, filesystem + boltdb-shipper, WAL, etc.)
   config: |
     server:
       http_listen_port: 3100
@@ -56,7 +77,7 @@ loki:
         kvstore:
           store: memberlist
 
-    # Almacenamiento local + boltdb-shipper (dev/kind)
+    # Almacenamiento local + boltdb-shipper (ideal para kind/dev)
     storage_config:
       boltdb_shipper:
         active_index_directory: /var/loki/index
@@ -65,7 +86,7 @@ loki:
       filesystem:
         directory: /var/loki/chunks
 
-    # schema explícito (aunque useTestSchema ya desbloquea la validación)
+    # Schema explícito
     schema_config:
       configs:
         - from: "2024-01-01"

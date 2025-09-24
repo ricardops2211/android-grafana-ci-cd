@@ -68,27 +68,25 @@ jobs:
           VALUES: k8s/loki-values.yaml
         run: |
           set -euo pipefail
-          helm template loki grafana/loki -n "$NS" -f "$VALUES" | tee /tmp/loki-render.yaml
+          helm template loki grafana/loki -n "$NS" -f "$VALUES" > /tmp/loki-render.yaml
           if grep -in 'consul' /tmp/loki-render.yaml; then
             echo "ERROR: aparece 'consul' en el render"; exit 1
           fi
           kubectl -n "$NS" apply --dry-run=server -f /tmp/loki-render.yaml
 
-      - name: Install/Upgrade Loki & wait
-        id: loki_install
+      - name: Install/Upgrade Loki & wait (atomic, 15m)
         shell: bash
         env:
           NS: observability
           VALUES: k8s/loki-values.yaml
         run: |
           set -euo pipefail
-          helm upgrade --install loki grafana/loki -n "$NS" -f "$VALUES" --wait --timeout 5m
-          kubectl -n "$NS" wait --for=condition=Ready --timeout=300s pod -l app.kubernetes.io/name=loki
-          echo "ok=true" >> "$GITHUB_OUTPUT"
+          # instala/actualiza y hace rollback automático si no llega a Ready
+          helm upgrade --install loki grafana/loki -n "$NS" -f "$VALUES" --atomic --timeout 15m
 
-      # (opcional) imprime info útil si algo va mal en pasos siguientes
-      - name: Loki diagnostics (only on failure so far)
-        if: failure() && steps.loki_install.outputs.ok == 'true'
+      # Diagnóstico si algo sigue sin Ready (sin romper el pipeline hasta aquí)
+      - name: Loki diagnostics (pods, describe, logs)
+        if: always()
         shell: bash
         run: |
           set -euo pipefail
@@ -98,6 +96,7 @@ jobs:
           kubectl -n observability describe po -l app.kubernetes.io/name=loki || true
           echo "---- Logs Loki (tail) ----"
           kubectl -n observability logs -l app.kubernetes.io/name=loki --tail=200 || true
+
 
       - name: Deploy app
         shell: bash
