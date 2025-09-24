@@ -198,3 +198,15 @@ jobs:
           fi
 
           echo "✅ Anotación creada correctamente."
+
+      - name: Publicar URL de dashboard en grafana
+        shell: bash
+        env:
+          GRAFANA_URL: https://ricardops2211.grafana.net
+          GC_GRAFANA_API_TOKEN: ${{ secrets.GC_GRAFANA_API_TOKEN }}
+          DASHBOARD_UID: sre-mttr-lab           
+          DASHBOARD_TITLE: "SRE MTTR Lab"      
+          DASHBOARD_JSON: dashboards/mttr_grafana.json  
+        run: |
+          python3 scripts/print_dashboard_url.py
+
