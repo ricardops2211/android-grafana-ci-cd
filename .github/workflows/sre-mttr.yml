@@ -65,7 +65,7 @@ jobs:
         shell: bash
         env:
           NS: observability
-          VALUES: /tmp/loki-values.yaml
+          VALUES: k8s/loki-values.yaml
         run: |
           set -euo pipefail
           helm template loki grafana/loki -n "$NS" -f "$VALUES" | tee /tmp/loki-render.yaml
@@ -79,7 +79,7 @@ jobs:
         shell: bash
         env:
           NS: observability
-          VALUES: /tmp/loki-values.yaml
+          VALUES: k8s/loki-values.yaml
         run: |
           set -euo pipefail
           helm upgrade --install loki grafana/loki -n "$NS" -f "$VALUES" --wait --timeout 5m
