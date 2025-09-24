@@ -1,6 +1,4 @@
-# Despliegue: SingleBinary (1 pod) y sin componentes extra del modo escalable
 deploymentMode: SingleBinary
-
 read:     { replicas: 0 }
 write:    { replicas: 0 }
 backend:  { replicas: 0 }
@@ -10,9 +8,17 @@ gateway:       { enabled: false }
 canary:        { enabled: false }
 lokiCanary:    { enabled: false }
 
-# ⚠️ USAMOS loki.config PARA BY-PASSEAR EL CALCULATED CONFIG DEL CHART
+singleBinary:
+  replicas: 1
+  persistence: { enabled: false, size: 10Gi }
+
+
+
 loki:
-  config: |-
+  # anula la config templated por defecto del chart
+  config: {}
+  # usa el YAML nativo como mapa (sin templating)
+  structuredConfig:
     auth_enabled: false
 
     server:
@@ -21,11 +27,9 @@ loki:
     common:
       replication_factor: 1
 
-    # Almacenamiento local (lab)
     storage_config:
       filesystem: {}
 
-    # Esquema boltdb-shipper (lab)
     schema_config:
       configs:
         - from: 2020-10-15
@@ -36,7 +40,7 @@ loki:
             prefix: index_
             period: 24h
 
-    # ⛔ Desactiva structured metadata (requerido con boltdb-shipper en Loki 3.5.x)
+    # Necesario si usas boltdb-shipper con Loki 3.5.x
     limits_config:
       allow_structured_metadata: false
 
@@ -52,10 +56,3 @@ loki:
         local:
           directory: /tmp/loki/rules
       enable_api: true
-
-# Réplica única
-singleBinary:
-  replicas: 1
-  persistence:
-    enabled: false
-    size: 10Gi

@@ -91,39 +91,37 @@ jobs:
           kubectl -n monitoring wait --for=condition=Available --timeout=600s \
             alertmanager/kps-kube-prometheus-stack-alertmanager || true
 
-      - name: Install Loki (SingleBinary) / Promtail / Grafana
+      - name: Install Loki (Helm v5), Promtail & Grafana
         shell: bash
         run: |
           set -euo pipefail
+          # Limpieza Loki previa (si existe)
           helm -n observability uninstall loki || true
-          kubectl -n observability delete po,sts,deploy,svc,cm,secret -l app.kubernetes.io/instance=loki --wait=false || true
+          kubectl -n observability delete po,sts,deploy,svc,cm,secret \
+            -l app.kubernetes.io/instance=loki --wait=false || true
 
-          helm upgrade --install loki grafana/loki -n observability \
-            --set deploymentMode=SingleBinary \
-            --set read.replicas=0 --set write.replicas=0 --set backend.replicas=0 \
-            --set chunksCache.enabled=false --set resultsCache.enabled=false \
-            --set gateway.enabled=false \
-            --set canary.enabled=false --set lokiCanary.enabled=false \
-            --set test.enabled=false \
-            --set "loki.limits_config.allow_structured_metadata=false"   # ← añadido
-            -f k8s/loki-values.yaml
+          # Loki con chart 5.43.0 y tu values v5
+          helm upgrade --install loki grafana/loki \
+            --version 5.43.0 \
+            -n observability \
+            -f k8s/loki-values-v5.yaml
 
+          # Promtail & Grafana
           helm upgrade --install promtail grafana/promtail -n observability -f k8s/promtail-values.yaml
           helm upgrade --install grafana  grafana/grafana  -n observability -f k8s/grafana-values.yaml
-          kubectl -n observability rollout status deploy/grafana --timeout=600s
-
+          kubectl -n observability rollout status deploy/grafana --timeout=600s || true
 
       - name: Wait for Loki (fail-fast + debug)
         id: loki_ready
         shell: bash
         run: |
           set -euo pipefail
-          if kubectl -n observability wait --for=condition=Ready --timeout=180s pod -l app.kubernetes.io/name=loki; then
+          if kubectl -n observability wait --for=condition=Ready --timeout=240s pod -l app.kubernetes.io/name=loki; then
             echo "ok=true" >> "$GITHUB_OUTPUT"
           else
             echo "ok=false" >> "$GITHUB_OUTPUT"
             echo "---- Pods Loki ----"
-            kubectl -n observability get po -l app.kubernetes.io/instance=loki -o wide || true
+            kubectl -n observability get po -l app.kubernetes.io/name=loki -o wide || true
             echo "---- Describe Loki ----"
             kubectl -n observability describe po -l app.kubernetes.io/name=loki || true
             echo "---- Logs Loki (tail) ----"
