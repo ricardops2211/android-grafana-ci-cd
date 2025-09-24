@@ -204,7 +204,7 @@ jobs:
         env:
           GRAFANA_URL: https://ricardops2211.grafana.net
           GC_GRAFANA_API_TOKEN: ${{ secrets.GC_GRAFANA_API_TOKEN }}
-          DASHBOARD_UID: "sre-mttr-lab
+          DASHBOARD_UID: "sre-mttr-lab"
           DASHBOARD_TITLE: "SRE MTTR Lab"
           # Usa el NOMBRE EXASCTO de tu datasource Loki en Grafana:
           LOKI_DS_NAME: grafanacloud-ricardops2211-logs
