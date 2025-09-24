@@ -146,19 +146,55 @@ jobs:
           GRAFANA_URL: https://ricardops2211.grafana.net
           GC_GRAFANA_API_TOKEN: ${{ secrets.GC_GRAFANA_API_TOKEN }}
         run: |
-          set -euo pipefail
-          : "${GC_GRAFANA_API_TOKEN:?Falta GC_GRAFANA_API_TOKEN}"
-          : "${GRAFANA_URL:?Falta GRAFANA_URL}"
+          # Usamos -e y pipefail, pero NO -u hasta validar envs para evitar abortar "en seco"
+          set -e -o pipefail
+
+          # 1) Validaciones claras
+          if [[ -z "${GC_GRAFANA_API_TOKEN:-}" ]]; then
+            echo "::warning::GC_GRAFANA_API_TOKEN no está definido (Service Account token con rol Editor/Admin). Omitiendo anotación."
+            exit 0
+          fi
+          if [[ -z "${GRAFANA_URL:-}" ]]; then
+            echo "::error::Falta GRAFANA_URL (https://<stack>.grafana.net)"; exit 1
+          fi
+
+          # 2) Traer outputs del step 'mttr' si existen; si no, fallback
           MTTR_SEC="${{ steps.mttr.outputs.mttr_sec }}"
           START_MS="${{ steps.mttr.outputs.start_ms }}"
           END_MS="${{ steps.mttr.outputs.end_ms }}"
-          read -r -d '' PAYLOAD <<EOF
-          { "time": ${START_MS}, "timeEnd": ${END_MS}, "text": "MTTR demo: ${MTTR_SEC}s", "tags": ["mttr","sre","podinfo"] }
-          EOF
-          RESP=$(curl -sS -w "\n%{http_code}" -H "Authorization: Bearer ${GC_GRAFANA_API_TOKEN}" -H "Content-Type: application/json" -X POST "${GRAFANA_URL}/api/annotations" --data "${PAYLOAD}")
-          BODY=$(echo "$RESP" | head -n-1); CODE=$(echo "$RESP" | tail -n1)
-          echo "HTTP_CODE=$CODE"; echo "BODY=$BODY"
-          if [[ "$CODE" != "200" && "$CODE" != "202" ]]; then
-            echo "::error::❌ Falló la anotación (HTTP $CODE)"; echo "$BODY"; exit 1
+
+          if [[ -z "${MTTR_SEC:-}" || -z "${START_MS:-}" || -z "${END_MS:-}" ]]; then
+            echo "::warning::No llegaron outputs de 'mttr'; usando fallback de 60s en la última 1 min."
+            END_MS=$(date +%s%3N)          # epoch ms actual
+            START_MS=$((END_MS-60000))     # -60s
+            MTTR_SEC=60
           fi
+
+          # 3) Construir payload con jq (JSON siempre válido)
+          PAYLOAD=$(jq -nc --argjson t "$START_MS" --argjson te "$END_MS" \
+            --arg txt "MTTR demo: ${MTTR_SEC}s" \
+            '{time:$t,timeEnd:$te,text:$txt,tags:["mttr","sre","podinfo"]}')
+
+          # 4) Llamar API de Grafana
+          RESP=$(curl -sS -w "\n%{http_code}" \
+            -H "Authorization: Bearer ${GC_GRAFANA_API_TOKEN}" \
+            -H "Content-Type: application/json" \
+            -X POST "${GRAFANA_URL}/api/annotations" \
+            --data "$PAYLOAD")
+
+          BODY=$(echo "$RESP" | head -n-1)
+          CODE=$(echo "$RESP" | tail -n1)
+
+          echo "HTTP_CODE=$CODE"
+          [[ -n "$BODY" ]] && echo "BODY=$BODY"
+
+          if [[ "$CODE" != "200" && "$CODE" != "202" ]]; then
+            echo "::error::No se pudo crear la anotación (HTTP $CODE)"
+            echo "Causas típicas:"
+            echo "  • Token NO es de Service Account del stack (debe ser Editor/Admin)."
+            echo "  • URL del stack incorrecta (usa https://<stack>.grafana.net)."
+            echo "  • 'time'/'timeEnd' deben ir en MILISEGUNDOS."
+            exit 1
+          fi
+
           echo "✅ Anotación creada correctamente."
