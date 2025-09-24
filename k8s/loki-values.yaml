@@ -15,7 +15,7 @@ singleBinary:
       emptyDir: {}
 
 loki:
-  # Config clásica soportada por la chart
+  useTestSchema: true
   config: |
     server:
       http_listen_port: 3100
