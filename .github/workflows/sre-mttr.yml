@@ -1,22 +1,63 @@
 name: SRE-MTTR-Lab (Grafana Cloud)
+
 on:
   push:
-    branches: [ "nuevo-sre-richie" ]
+    branches: ["nuevo-sre-richie"]
+  workflow_dispatch: {}
 
 jobs:
   lab:
     runs-on: ubuntu-latest
     timeout-minutes: 60
     env:
+      # Kubeconfig persistente en el workspace del job
+      KUBECONFIG: ${{ github.workspace }}/kubeconfig
+
+      # Endpoints / credenciales (como Secrets de GitHub)
       GC_PROM_URL: ${{ secrets.GC_PROM_URL }}
+      GC_PROM_USERNAME: ${{ secrets.GC_PROM_USERNAME }}
+      GC_PROM_PASSWORD: ${{ secrets.GC_PROM_PASSWORD }}
+
       GC_LOKI_URL: ${{ secrets.GC_LOKI_URL }}
       GC_LOKI_USERNAME: ${{ secrets.GC_LOKI_USERNAME }}
       GC_LOKI_PASSWORD: ${{ secrets.GC_LOKI_PASSWORD }}
 
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout
+        uses: actions/checkout@v4
 
-      # instalar kind/kubectl/helm (igual que antes) y crear cluster Kind…
+      - name: Instalar kind / kubectl / helm / utilidades
+        run: |
+          set -e
+          sudo apt-get update -y
+          sudo apt-get install -y jq curl ca-certificates gnupg
+          curl -Lo kubectl https://storage.googleapis.com/kubernetes-release/release/$(curl -s https://storage.googleapis.com/kubernetes-release/release/stable.txt)/bin/linux/amd64/kubectl
+          chmod +x kubectl && sudo mv kubectl /usr/local/bin/
+          curl -Lo kind https://kind.sigs.k8s.io/dl/v0.23.0/kind-linux-amd64
+          chmod +x kind && sudo mv kind /usr/local/bin/
+          curl -fsSL https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 | bash
+
+      - name: Crear clúster Kind y kubeconfig
+        run: |
+          set -e
+          cat > kind.yaml <<'YAML'
+          kind: Cluster
+          apiVersion: kind.x-k8s.io/v1alpha4
+          nodes:
+            - role: control-plane
+          YAML
+          kind create cluster --name sre-mttr --config kind.yaml
+          kind get kubeconfig --name sre-mttr > "$KUBECONFIG"
+          chmod 600 "$KUBECONFIG"
+          kubectl config use-context kind-sre-mttr
+          # Esperas rápidas
+          for i in {1..30}; do
+            if kubectl version --short >/dev/null 2>&1; then break; fi
+            echo "⏳ Esperando API server..."
+            sleep 2
+          done
+          kubectl get nodes -o wide
+          kubectl wait --for=condition=Ready nodes --all --timeout=180s
 
       - name: Namespaces
         run: |
@@ -27,8 +68,8 @@ jobs:
         run: |
           kubectl -n monitoring delete secret grafana-cloud-metrics || true
           kubectl -n monitoring create secret generic grafana-cloud-metrics \
-            --from-literal=username='${{ secrets.GC_PROM_USERNAME }}' \
-            --from-literal=password='${{ secrets.GC_PROM_PASSWORD }}'
+            --from-literal=username="${GC_PROM_USERNAME}" \
+            --from-literal=password="${GC_PROM_PASSWORD}"
 
       - name: Agregar repos Helm
         run: |
@@ -36,33 +77,63 @@ jobs:
           helm repo add prometheus-community https://prometheus-community.github.io/helm-charts
           helm repo update
 
-      - name: Instalar kube-prometheus-stack (con remote_write)
+      - name: Instalar kube-prometheus-stack (con remote_write → Grafana Cloud)
         run: |
-          # Sustituimos variables dentro del values con envsubst (sólo URL)
+          # Renderiza variables de entorno en el values (usa ${GC_PROM_URL})
           envsubst < infra/helm/values-prom.yaml > /tmp/values-prom.evaluated.yaml
           helm upgrade --install monitoring prometheus-community/kube-prometheus-stack \
-            -n monitoring -f /tmp/values-prom.evaluated.yaml \
-            --wait --timeout 15m
+            -n monitoring \
+            -f /tmp/values-prom.evaluated.yaml \
+            --wait --timeout 20m
 
       - name: Instalar Promtail apuntando a Grafana Cloud Loki
         run: |
           envsubst < infra/helm/values-loki.yaml > /tmp/values-loki.evaluated.yaml
           helm upgrade --install loki grafana/loki-stack \
-            -n monitoring -f /tmp/values-loki.evaluated.yaml \
+            -n monitoring \
+            -f /tmp/values-loki.evaluated.yaml \
             --set loki.enabled=false \
-            --wait --timeout 10m
+            --wait --timeout 15m
 
       - name: Desplegar app y reglas/alertas
         run: |
           kubectl apply -f k8s/app/podinfo.yaml
           kubectl apply -f k8s/alerts/mttr-recording-rules.yaml
+          # Espera a que la app esté lista inicialmente
+          kubectl -n demo-app rollout status deploy/podinfo --timeout=5m
 
       - name: Inyectar incidente y medir MTTR (publica en Loki Cloud)
-        env:
-          GC_LOKI_URL: ${{ secrets.GC_LOKI_URL }}
-          GC_LOKI_USERNAME: ${{ secrets.GC_LOKI_USERNAME }}
-          GC_LOKI_PASSWORD: ${{ secrets.GC_LOKI_PASSWORD }}
         run: |
-          chmod +x scripts/*.sh
-          ./scripts/incident_inject.sh
-          ./scripts/measure_mttr.sh
+          set -euo pipefail
+          NS="demo-app"
+          DEPLOY="podinfo"
+
+          echo "📌 Marcando inicio de incidente…"
+          START=$(date +%s)
+
+          echo "🔧 Inyectando incidente: replicas=0"
+          kubectl -n "$NS" scale deploy "$DEPLOY" --replicas=0
+
+          echo "⏳ Esperando a que la alerta pueda dispararse (for: 1m)…"
+          sleep 90
+
+          echo "🩹 Restaurando: replicas=2"
+          kubectl -n "$NS" scale deploy "$DEPLOY" --replicas=2
+          kubectl -n "$NS" rollout status deploy/"$DEPLOY" --timeout=5m
+
+          END=$(date +%s)
+          MTTR_SEC=$((END - START))
+          if [ "$MTTR_SEC" -lt 0 ]; then MTTR_SEC=0; fi
+          echo "✅ MTTR medido: ${MTTR_SEC}s"
+
+          # Publicar el MTTR en Loki Cloud con Basic Auth (tenant+token)
+          TS_NS=$(($(date +%s%N)))
+          LOG_LINE=$(jq -nc --argjson mttr "$MTTR_SEC" \
+            '{"mttr_seconds":$mttr,"message":"MTTR (kind→Grafana Cloud)","incidents_resolved":1}')
+
+          curl -sS -u "${GC_LOKI_USERNAME}:${GC_LOKI_PASSWORD}" \
+            -H "Content-Type: application/json" \
+            -X POST "${GC_LOKI_URL}" \
+            --data "{\"streams\":[{\"stream\":{\"app\":\"podinfo\",\"metric\":\"mttr\"},\"values\":[[\"${TS_NS}\",\"${LOG_LINE}\"]]}]}"
+
+          echo "🧭 Busca en Grafana Cloud (Explore→Loki): {app=\"podinfo\",metric=\"mttr\"}"

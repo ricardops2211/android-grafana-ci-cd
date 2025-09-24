@@ -1,5 +1,5 @@
 loki:
-  enabled: false           # no levantamos Loki en el cluster
+  enabled: false
 
 promtail:
   enabled: true

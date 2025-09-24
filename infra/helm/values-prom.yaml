@@ -1,5 +1,5 @@
 grafana:
-  enabled: false        # ya no instalamos Grafana en el cluster
+  enabled: false
 
 alertmanager:
   enabled: true
