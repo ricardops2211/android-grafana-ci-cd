@@ -146,48 +146,48 @@ jobs:
 
           echo "🧭 Busca en Grafana Cloud (Explore→Loki): {app=\"podinfo\",metric=\"mttr\"}"
 
-      - name: Publicar anotación en Grafana Cloud (visible en dashboards gestionados)
+      - name: Crear anotación en Grafana (stack UI) con MTTR
         env:
-          GRAFANA_URL: ${{ secrets.GRAFANA_URL }}            # ej: https://TU_STACK.grafana.net
-          GRAFANA_API_TOKEN: ${{ secrets.GRAFANA_API_TOKEN }}# API key (Editor/Admin)
-          START_MS: ${{ steps.mttr.outputs.start_ms }}
-          END_MS: ${{ steps.mttr.outputs.end_ms }}
-          MTTR_SEC: ${{ steps.mttr.outputs.mttr_seconds }}
+          GRAFANA_URL: https://ricardops2211.grafana.net
+          GC_GRAFANA_API_TOKEN: ${{ secrets.GC_GRAFANA_API_TOKEN }}
         run: |
           set -euo pipefail
 
-          RUN_URL="https://github.com/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
-          TEXT="MTTR=${MTTR_SEC}s · Run: ${RUN_URL}"
+          # Si ya tienes MTTR_SEC en un archivo/env, reutilízalo; aquí lo re-calculo de ejemplo:
+          START=$(date +%s)
+          END=$((START + 95))   # <-- reemplaza con tu cálculo real
+          MTTR_SEC=$((END-START))
 
-          # Tags para que sea fácil de filtrar/buscar en dashboards de Grafana Cloud
-          TAGS_JSON='[
-            "grafanacloud",
-            "usage-insights",
-            "cardinality-management",
-            "loki",
-            "mttr",
-            "sre",
-            "alert groups",
-            "grafana-incident",
-            "irm",
-            "insights"
-          ]'
+          # Timestamps en milisegundos (Grafana los quiere en ms)
+          START_MS=$((START*1000))
+          END_MS=$((END*1000))
 
-          PAYLOAD=$(jq -nc \
-            --arg text "$TEXT" \
-            --argjson tags "$TAGS_JSON" \
-            --argjson time $START_MS \
-            --argjson timeEnd $END_MS \
-            '{text:$text, tags:$tags, time:$time, timeEnd:$timeEnd}')
+          read -r -d '' PAYLOAD <<EOF
+          {
+            "time": ${START_MS},
+            "timeEnd": ${END_MS},
+            "text": "MTTR demo: ${MTTR_SEC}s",
+            "tags": ["mttr","sre","podinfo"]
+          }
+          EOF
 
-          CODE=$(curl -sS -o /tmp/ann.json -w "%{http_code}" \
-            -H "Authorization: Bearer ${GRAFANA_API_TOKEN}" \
+          RESP=$(curl -sS -w "\n%{http_code}" \
+            -H "Authorization: Bearer ${GC_GRAFANA_API_TOKEN}" \
             -H "Content-Type: application/json" \
             -X POST "${GRAFANA_URL}/api/annotations" \
             --data "${PAYLOAD}")
 
-          if [ "$CODE" -ge 200 ] && [ "$CODE" -lt 300 ]; then
-            echo "✅ Anotación creada"; cat /tmp/ann.json
-          else
-            echo "❌ Falló la anotación (HTTP $CODE)"; cat /tmp/ann.json; exit 1
+          BODY=$(echo "$RESP" | head -n-1)
+          CODE=$(echo "$RESP" | tail -n1)
+
+          if [[ "$CODE" != "200" && "$CODE" != "202" ]]; then
+            echo "::error::❌ Falló la anotación (HTTP $CODE)"
+            echo "$BODY"
+            echo "Causas típicas:"
+            echo "  • Token no es de Service Account (usa uno con rol Editor/Admin)."
+            echo "  • URL no es la del stack (usa https://<stack>.grafana.net)."
+            echo "  • Falta 'Authorization: Bearer <token>' o payload inválido (time en ms)."
+            exit 1
           fi
+
+          echo "✅ Anotación creada en Grafana: ${BODY}"
