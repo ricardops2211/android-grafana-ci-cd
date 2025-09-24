@@ -1,4 +1,4 @@
-name: sre-mttr-loki-v1
+name: sre-mttr-loki
 
 on:
   push:
