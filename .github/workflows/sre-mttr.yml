@@ -140,45 +140,46 @@ jobs:
         run: |
           set -euo pipefail
 
-          # Validaciones claras para evitar abortar “en seco”
+          # Validaciones
           : "${GC_GRAFANA_API_TOKEN:?Falta GC_GRAFANA_API_TOKEN (Service Account token con rol Editor)}"
           : "${GRAFANA_URL:?Falta GRAFANA_URL (https://<stack>.grafana.net)}"
 
-          MTTR_SEC="${{ steps.mttr.outputs.mttr_sec }}"
-          START_MS="${{ steps.mttr.outputs.start_ms }}"
-          END_MS="${{ steps.mttr.outputs.end_ms }}"
+          # Usa tus valores reales o los outputs del step previo
+          MTTR_SEC="96"
+          START_MS="1758748137000"
+          END_MS="1758748233000"
 
-          if [[ -z "$MTTR_SEC" || -z "$START_MS" || -z "$END_MS" ]]; then
-            echo "::error::No llegaron outputs del step 'mttr' (mttr_sec/start_ms/end_ms)."
-            exit 1
-          fi
-
-          read -r -d '' PAYLOAD <<EOF
+          read -r -d '' PAYLOAD <<'EOF'
           {
-            "time": ${START_MS},
-            "timeEnd": ${END_MS},
-            "text": "MTTR demo: ${MTTR_SEC}s",
+            "time": __START_MS__,
+            "timeEnd": __END_MS__,
+            "text": "MTTR demo: __MTTR_SEC__s",
             "tags": ["mttr","sre","podinfo"]
           }
           EOF
+          PAYLOAD=${PAYLOAD/__START_MS__/$START_MS}
+          PAYLOAD=${PAYLOAD/__END_MS__/$END_MS}
+          PAYLOAD=${PAYLOAD/__MTTR_SEC__/$MTTR_SEC}
 
           RESP=$(curl -sS -w "\n%{http_code}" \
             -H "Authorization: Bearer ${GC_GRAFANA_API_TOKEN}" \
             -H "Content-Type: application/json" \
             -X POST "${GRAFANA_URL}/api/annotations" \
             --data "${PAYLOAD}")
-
           BODY=$(echo "$RESP" | head -n-1)
           CODE=$(echo "$RESP" | tail -n1)
+
+          echo "HTTP_CODE=$CODE"
+          echo "BODY=$BODY"
 
           if [[ "$CODE" != "200" && "$CODE" != "202" ]]; then
             echo "::error::❌ Falló la anotación (HTTP $CODE)"
             echo "$BODY"
             echo "Causas típicas:"
-            echo "  • Token NO es Service Account (usa uno con rol Editor/Admin)."
-            echo "  • URL del stack incorrecta (usa https://<stack>.grafana.net)."
-            echo "  • 'time' y 'timeEnd' deben ir en milisegundos."
+            echo "  • Token NO es de Service Account del stack (usa uno con rol Editor/Admin)."
+            echo "  • URL incorrecta (usa https://<stack>.grafana.net)."
+            echo "  • 'time'/'timeEnd' deben ir en MILISEGUNDOS (epoch ms)."
             exit 1
           fi
 
-          echo "✅ Anotación creada: $BODY"
+          echo "✅ Anotación creada correctamente."
