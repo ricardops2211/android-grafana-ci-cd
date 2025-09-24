@@ -102,65 +102,56 @@ jobs:
           # Espera a que la app esté lista inicialmente
           kubectl -n demo-app rollout status deploy/podinfo --timeout=5m
 
-      - name: Inyectar incidente y medir MTTR (publica en Loki Cloud)
+      - name: Inyectar incidente y medir MTTR
         id: mttr
+        shell: bash
         run: |
           set -euo pipefail
-          NS="demo-app"
-          DEPLOY="podinfo"
+          NS="demo-app"; DEPLOY="podinfo"
 
-          echo "📌 Marcando inicio de incidente…"
           START=$(date +%s)
-
-          echo "🔧 Inyectando incidente: replicas=0"
           kubectl -n "$NS" scale deploy "$DEPLOY" --replicas=0
-
-          echo "⏳ Esperando a que la alerta pueda dispararse (for: 1m)…"
           sleep 90
-
-          echo "🩹 Restaurando: replicas=2"
           kubectl -n "$NS" scale deploy "$DEPLOY" --replicas=2
           kubectl -n "$NS" rollout status deploy/"$DEPLOY" --timeout=5m
-
           END=$(date +%s)
-          MTTR_SEC=$((END - START))
-          if [ "$MTTR_SEC" -lt 0 ]; then MTTR_SEC=0; fi
-          echo "✅ MTTR medido: ${MTTR_SEC}s"
 
-          # Outputs para anotación (ms) y para texto (segundos)
-          START_MS=$((START * 1000))
-          END_MS=$((END * 1000))
-          echo "start_ms=$START_MS" >> $GITHUB_OUTPUT
-          echo "end_ms=$END_MS" >> $GITHUB_OUTPUT
-          echo "mttr_seconds=$MTTR_SEC" >> $GITHUB_OUTPUT
+          MTTR_SEC=$((END-START)); (( MTTR_SEC<0 )) && MTTR_SEC=0
+          START_MS=$((START*1000)); END_MS=$((END*1000))
 
-          # Publicar el MTTR en Loki Cloud con Basic Auth (tenant+token)
+          echo "mttr_sec=${MTTR_SEC}"       >> "$GITHUB_OUTPUT"
+          echo "start_ms=${START_MS}"       >> "$GITHUB_OUTPUT"
+          echo "end_ms=${END_MS}"           >> "$GITHUB_OUTPUT"
+
+          # (Opcional) publicar en Loki (ya lo tienes resuelto)
           TS_NS=$(($(date +%s%N)))
           LOG_LINE=$(jq -nc --argjson mttr "$MTTR_SEC" \
             '{"mttr_seconds":$mttr,"message":"MTTR (kind→Grafana Cloud)","incidents_resolved":1}')
-
-          curl -sS -u "${GC_LOKI_USERNAME}:${GC_LOKI_PASSWORD}" \
-            -H "Content-Type: application/json" \
-            -X POST "${GC_LOKI_URL}" \
-            --data "{\"streams\":[{\"stream\":{\"app\":\"podinfo\",\"metric\":\"mttr\"},\"values\":[[\"${TS_NS}\",\"${LOG_LINE}\"]]}]}"
-
-          echo "🧭 Busca en Grafana Cloud (Explore→Loki): {app=\"podinfo\",metric=\"mttr\"}"
+          RESP=$(curl -sS -w "\n%{http_code}" -u "${GC_LOKI_USERNAME}:${GC_LOKI_PASSWORD}" \
+            -H "Content-Type: application/json" -X POST "${GC_LOKI_URL}" \
+            --data "{\"streams\":[{\"stream\":{\"app\":\"podinfo\",\"metric\":\"mttr\"},\"values\":[[\"${TS_NS}\",\"${LOG_LINE}\"]]}]}")
+          CODE=$(echo "$RESP" | tail -n1); [[ "$CODE" =~ ^20(0|4)$ ]] || { echo "::warning::Push a Loki devolvió $CODE"; }
 
       - name: Crear anotación en Grafana (stack UI) con MTTR
+        shell: bash
         env:
           GRAFANA_URL: https://ricardops2211.grafana.net
           GC_GRAFANA_API_TOKEN: ${{ secrets.GC_GRAFANA_API_TOKEN }}
         run: |
           set -euo pipefail
 
-          # Si ya tienes MTTR_SEC en un archivo/env, reutilízalo; aquí lo re-calculo de ejemplo:
-          START=$(date +%s)
-          END=$((START + 95))   # <-- reemplaza con tu cálculo real
-          MTTR_SEC=$((END-START))
+          # Validaciones claras para evitar abortar “en seco”
+          : "${GC_GRAFANA_API_TOKEN:?Falta GC_GRAFANA_API_TOKEN (Service Account token con rol Editor)}"
+          : "${GRAFANA_URL:?Falta GRAFANA_URL (https://<stack>.grafana.net)}"
 
-          # Timestamps en milisegundos (Grafana los quiere en ms)
-          START_MS=$((START*1000))
-          END_MS=$((END*1000))
+          MTTR_SEC="${{ steps.mttr.outputs.mttr_sec }}"
+          START_MS="${{ steps.mttr.outputs.start_ms }}"
+          END_MS="${{ steps.mttr.outputs.end_ms }}"
+
+          if [[ -z "$MTTR_SEC" || -z "$START_MS" || -z "$END_MS" ]]; then
+            echo "::error::No llegaron outputs del step 'mttr' (mttr_sec/start_ms/end_ms)."
+            exit 1
+          fi
 
           read -r -d '' PAYLOAD <<EOF
           {
@@ -184,10 +175,10 @@ jobs:
             echo "::error::❌ Falló la anotación (HTTP $CODE)"
             echo "$BODY"
             echo "Causas típicas:"
-            echo "  • Token no es de Service Account (usa uno con rol Editor/Admin)."
-            echo "  • URL no es la del stack (usa https://<stack>.grafana.net)."
-            echo "  • Falta 'Authorization: Bearer <token>' o payload inválido (time en ms)."
+            echo "  • Token NO es Service Account (usa uno con rol Editor/Admin)."
+            echo "  • URL del stack incorrecta (usa https://<stack>.grafana.net)."
+            echo "  • 'time' y 'timeEnd' deben ir en milisegundos."
             exit 1
           fi
 
-          echo "✅ Anotación creada en Grafana: ${BODY}"
+          echo "✅ Anotación creada: $BODY"
