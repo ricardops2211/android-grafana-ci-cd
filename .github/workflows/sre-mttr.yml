@@ -108,29 +108,37 @@ jobs:
         run: |
           set -euo pipefail
           NS="demo-app"; DEPLOY="podinfo"
-
           START=$(date +%s)
           kubectl -n "$NS" scale deploy "$DEPLOY" --replicas=0
           sleep 90
           kubectl -n "$NS" scale deploy "$DEPLOY" --replicas=2
           kubectl -n "$NS" rollout status deploy/"$DEPLOY" --timeout=5m
           END=$(date +%s)
-
           MTTR_SEC=$((END-START)); (( MTTR_SEC<0 )) && MTTR_SEC=0
           START_MS=$((START*1000)); END_MS=$((END*1000))
+          echo "mttr_sec=${MTTR_SEC}" >> "$GITHUB_OUTPUT"
+          echo "start_ms=${START_MS}" >> "$GITHUB_OUTPUT"
+          echo "end_ms=${END_MS}"     >> "$GITHUB_OUTPUT"
 
-          echo "mttr_sec=${MTTR_SEC}"       >> "$GITHUB_OUTPUT"
-          echo "start_ms=${START_MS}"       >> "$GITHUB_OUTPUT"
-          echo "end_ms=${END_MS}"           >> "$GITHUB_OUTPUT"
-
-          # (Opcional) publicar en Loki (ya lo tienes resuelto)
-          TS_NS=$(($(date +%s%N)))
-          LOG_LINE=$(jq -nc --argjson mttr "$MTTR_SEC" \
-            '{"mttr_seconds":$mttr,"message":"MTTR (kind→Grafana Cloud)","incidents_resolved":1}')
-          RESP=$(curl -sS -w "\n%{http_code}" -u "${GC_LOKI_USERNAME}:${GC_LOKI_PASSWORD}" \
-            -H "Content-Type: application/json" -X POST "${GC_LOKI_URL}" \
-            --data "{\"streams\":[{\"stream\":{\"app\":\"podinfo\",\"metric\":\"mttr\"},\"values\":[[\"${TS_NS}\",\"${LOG_LINE}\"]]}]}")
-          CODE=$(echo "$RESP" | tail -n1); [[ "$CODE" =~ ^20(0|4)$ ]] || { echo "::warning::Push a Loki devolvió $CODE"; }
+      - name: Publicar MTTR en Loki Cloud (payload seguro con jq)
+        shell: bash
+        env:
+          GC_LOKI_URL: ${{ secrets.GC_LOKI_URL }}
+          GC_LOKI_USERNAME: ${{ secrets.GC_LOKI_USERNAME }}
+          GC_LOKI_PASSWORD: ${{ secrets.GC_LOKI_PASSWORD }}
+        run: |
+          set -euo pipefail
+          MTTR_SEC="${{ steps.mttr.outputs.mttr_sec }}"
+          TS_NS="$(date +%s%N)"
+          LINE=$(jq -c -n --argjson mttr "$MTTR_SEC" '{mttr_seconds:$mttr, message:"MTTR (kind→Grafana Cloud)", incidents_resolved:1}')
+          PAYLOAD=$(jq -nc --arg ts "$TS_NS" --arg line "$LINE" '{streams:[{stream:{app:"podinfo",metric:"mttr"},values:[[ $ts, $line ]]}]}')
+          RESP=$(curl -sS -w "\n%{http_code}" -u "${GC_LOKI_USERNAME}:${GC_LOKI_PASSWORD}" -H "Content-Type: application/json" -X POST "${GC_LOKI_URL}" --data-raw "$PAYLOAD")
+          BODY=$(echo "$RESP" | head -n-1); CODE=$(echo "$RESP" | tail -n1)
+          echo "HTTP_CODE=$CODE"; [[ -n "$BODY" ]] && echo "RESP_BODY=$BODY"
+          if [[ "$CODE" != "204" && "$CODE" != "200" ]]; then
+            echo "::error::Push a Loki falló (HTTP $CODE)"; echo "$BODY"; exit 1
+          fi
+          echo "✅ MTTR publicado en Loki."
 
       - name: Crear anotación en Grafana (stack UI) con MTTR
         shell: bash
@@ -139,47 +147,18 @@ jobs:
           GC_GRAFANA_API_TOKEN: ${{ secrets.GC_GRAFANA_API_TOKEN }}
         run: |
           set -euo pipefail
-
-          # Validaciones
-          : "${GC_GRAFANA_API_TOKEN:?Falta GC_GRAFANA_API_TOKEN (Service Account token con rol Editor)}"
-          : "${GRAFANA_URL:?Falta GRAFANA_URL (https://<stack>.grafana.net)}"
-
-          # Usa tus valores reales o los outputs del step previo
-          MTTR_SEC="96"
-          START_MS="1758748137000"
-          END_MS="1758748233000"
-
-          read -r -d '' PAYLOAD <<'EOF'
-          {
-            "time": __START_MS__,
-            "timeEnd": __END_MS__,
-            "text": "MTTR demo: __MTTR_SEC__s",
-            "tags": ["mttr","sre","podinfo"]
-          }
+          : "${GC_GRAFANA_API_TOKEN:?Falta GC_GRAFANA_API_TOKEN}"
+          : "${GRAFANA_URL:?Falta GRAFANA_URL}"
+          MTTR_SEC="${{ steps.mttr.outputs.mttr_sec }}"
+          START_MS="${{ steps.mttr.outputs.start_ms }}"
+          END_MS="${{ steps.mttr.outputs.end_ms }}"
+          read -r -d '' PAYLOAD <<EOF
+          { "time": ${START_MS}, "timeEnd": ${END_MS}, "text": "MTTR demo: ${MTTR_SEC}s", "tags": ["mttr","sre","podinfo"] }
           EOF
-          PAYLOAD=${PAYLOAD/__START_MS__/$START_MS}
-          PAYLOAD=${PAYLOAD/__END_MS__/$END_MS}
-          PAYLOAD=${PAYLOAD/__MTTR_SEC__/$MTTR_SEC}
-
-          RESP=$(curl -sS -w "\n%{http_code}" \
-            -H "Authorization: Bearer ${GC_GRAFANA_API_TOKEN}" \
-            -H "Content-Type: application/json" \
-            -X POST "${GRAFANA_URL}/api/annotations" \
-            --data "${PAYLOAD}")
-          BODY=$(echo "$RESP" | head -n-1)
-          CODE=$(echo "$RESP" | tail -n1)
-
-          echo "HTTP_CODE=$CODE"
-          echo "BODY=$BODY"
-
+          RESP=$(curl -sS -w "\n%{http_code}" -H "Authorization: Bearer ${GC_GRAFANA_API_TOKEN}" -H "Content-Type: application/json" -X POST "${GRAFANA_URL}/api/annotations" --data "${PAYLOAD}")
+          BODY=$(echo "$RESP" | head -n-1); CODE=$(echo "$RESP" | tail -n1)
+          echo "HTTP_CODE=$CODE"; echo "BODY=$BODY"
           if [[ "$CODE" != "200" && "$CODE" != "202" ]]; then
-            echo "::error::❌ Falló la anotación (HTTP $CODE)"
-            echo "$BODY"
-            echo "Causas típicas:"
-            echo "  • Token NO es de Service Account del stack (usa uno con rol Editor/Admin)."
-            echo "  • URL incorrecta (usa https://<stack>.grafana.net)."
-            echo "  • 'time'/'timeEnd' deben ir en MILISEGUNDOS (epoch ms)."
-            exit 1
+            echo "::error::❌ Falló la anotación (HTTP $CODE)"; echo "$BODY"; exit 1
           fi
-
           echo "✅ Anotación creada correctamente."
