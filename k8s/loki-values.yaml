@@ -1,6 +1,8 @@
-# k8s/loki-values.yaml
 canary:
   enabled: false
+
+test:
+  enabled: false  # <<--- IMPORTANTE
 
 singleBinary:
   extraVolumeMounts:
@@ -15,27 +17,22 @@ loki:
   structuredConfig:
     server:
       http_listen_port: 3100
-
     common:
       replication_factor: 1
       ring:
         kvstore:
           store: memberlist
-
     memberlist:
       abort_if_cluster_join_fails: false
       join_members:
         - loki-memberlist
-
     analytics:
       enabled: false
       reporting_enabled: false
-
     ingester:
       wal:
         enabled: true
         dir: /var/loki/wal
-
     query_scheduler:
       ring:
         kvstore:
