@@ -91,27 +91,8 @@ jobs:
           kubectl -n monitoring wait --for=condition=Available --timeout=600s \
             alertmanager/kps-kube-prometheus-stack-alertmanager || true
 
-      - name: Install Loki (Helm v5), Promtail & Grafana
-        shell: bash
-        run: |
-          set -euo pipefail
-          # Limpieza Loki previa (si existe)
-          helm -n observability uninstall loki || true
-          kubectl -n observability delete po,sts,deploy,svc,cm,secret \
-            -l app.kubernetes.io/instance=loki --wait=false || true
-
-          # Loki con chart 5.43.0 y tu values v5
-          helm upgrade --install loki grafana/loki \
-            --version 5.43.0 \
-            -n observability \
-            -f k8s/loki-values-v5.yaml
-
-          # Promtail & Grafana
-          helm upgrade --install promtail grafana/promtail -n observability -f k8s/promtail-values.yaml
-          helm upgrade --install grafana  grafana/grafana  -n observability -f k8s/grafana-values.yaml
-          kubectl -n observability rollout status deploy/grafana --timeout=600s || true
-
-      - name: Wait for Loki (fail-fast + debug)
+      # === NO instala Loki/Promtail/Grafana: solo verifica Loki ya desplegado en el clúster ===
+      - name: Check Loki on cluster (no install)
         id: loki_ready
         shell: bash
         run: |
@@ -205,7 +186,7 @@ jobs:
           message: "incident end status=recovered"
           loki_url: "http://127.0.0.1:3100"
 
-      - name: Calc MTTD/MTTR
+      - name: Calcular MTTD/MTTR
         if: ${{ steps.loki_ready.outputs.ok == 'true' }}
         id: calc
         uses: ./.github/actions/loki-calc-mttr
