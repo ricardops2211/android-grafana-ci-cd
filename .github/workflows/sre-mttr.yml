@@ -37,7 +37,14 @@ jobs:
           chmod +x kind && sudo mv kind /usr/local/bin/
           curl -fsSL https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 | bash
 
+      - name: Login a GHCR (evita rate limit)
+        run: |
+          echo "${{ github.token }}" | docker login ghcr.io -u ${{ github.actor }} --password-stdin
+
+
       - name: Crear clúster Kind y kubeconfig
+        env:
+          KIND_NODE_IMAGE: ghcr.io/kindest/node:v1.30.0
         run: |
           set -e
           cat > kind.yaml <<'YAML'
@@ -46,10 +53,18 @@ jobs:
           nodes:
             - role: control-plane
           YAML
-          kind create cluster --name sre-mttr --config kind.yaml
+
+          # Pre-pull con reintentos (evita fallos intermitentes)
+          for i in 1 2 3; do
+            docker pull "$KIND_NODE_IMAGE" && break || { echo "retry $i"; sleep 5; }
+          done
+
+          kind create cluster --name sre-mttr --config kind.yaml --image "$KIND_NODE_IMAGE"
+
           kind get kubeconfig --name sre-mttr > "$KUBECONFIG"
           chmod 600 "$KUBECONFIG"
           kubectl config use-context kind-sre-mttr
+
           # Esperas rápidas
           for i in {1..30}; do
             if kubectl version --short >/dev/null 2>&1; then break; fi
