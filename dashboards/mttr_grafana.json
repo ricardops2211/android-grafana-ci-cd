@@ -8,27 +8,24 @@
     {
       "type": "stat",
       "title": "MTTR (min)",
-      "gridPos": {"x":0, "y":0, "w":6, "h":4},
-      "options": {"reduceOptions": {"calcs": ["lastNotNull"], "values": false}},
+      "gridPos": { "x": 0, "y": 0, "w": 6, "h": 4 },
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"], "values": false } },
       "targets": [
         {
-          "datasource": {"type": "loki"},
+          "datasource": { "type": "loki" },
           "expr": "{app=\"podinfo\", metric=\"mttr\"} | json | unwrap mttr_seconds"
         }
       ],
-      "fieldConfig": {"defaults": {"unit": "m"}, "overrides": []}
+      "fieldConfig": { "defaults": { "unit": "m" }, "overrides": [] }
     },
     {
       "type": "logs",
       "title": "Logs MTTR (Loki)",
-      "gridPos": {"x":0, "y":4, "w":12, "h":8},
+      "gridPos": { "x": 0, "y": 4, "w": 12, "h": 8 },
       "targets": [
-        {
-          "datasource": {"type": "loki"},
-          "expr": "{app=\"podinfo\", metric=\"mttr\"}"
-        }
+        { "datasource": { "type": "loki" }, "expr": "{app=\"podinfo\", metric=\"mttr\"}" }
       ]
     }
   ],
-  "time": {"from": "now-24h", "to": "now"}
+  "time": { "from": "now-24h", "to": "now" }
 }
