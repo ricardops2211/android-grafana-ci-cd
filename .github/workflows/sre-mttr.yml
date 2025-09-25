@@ -163,6 +163,22 @@ jobs:
           fi
           echo "✅ MTTR publicado en Loki."
 
+      - name: Diagnosticar y auto-arreglar dashboard
+        shell: bash
+        env:
+          GRAFANA_URL: https://ricardops2211.grafana.net
+          GC_GRAFANA_API_TOKEN: ${{ secrets.GC_GRAFANA_API_TOKEN }}
+          DASHBOARD_UID: sre-mttr-lab
+          DASHBOARD_TITLE: "SRE MTTR Lab"
+          # pon el NOMBRE EXACTO del datasource de Loki en tu instancia:
+          LOKI_DS_NAME: grafanacloud-ricardops2211-logs
+          LABEL_APP: podinfo
+          LABEL_ENV: ci
+          DEFAULT_FROM: now-24h
+          DEFAULT_TO: now
+        run: |
+          python3 scripts/diag_fix_dashboard.py
+
       - name: Crear anotación en Grafana (stack UI) con MTTR
         shell: bash
         env:
