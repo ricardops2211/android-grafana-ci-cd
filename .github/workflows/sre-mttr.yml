@@ -42,11 +42,26 @@ jobs:
           echo "${{ github.token }}" | docker login ghcr.io -u ${{ github.actor }} --password-stdin
 
 
-      - name: Crear clúster Kind y kubeconfig
+      - name: Crear clúster Kind y kubeconfig (sin secrets, con fallback)
         env:
-          KIND_NODE_IMAGE: ghcr.io/kindest/node:v1.30.0
+          KIND_NODE_CANDIDATES: "kindest/node:v1.29.2 kindest/node:v1.28.0 kindest/node:v1.30.0"
         run: |
           set -e
+          PICKED=""
+          for img in $KIND_NODE_CANDIDATES; do
+            echo "⏬ pull $img"
+            for i in 1 2 3; do
+              if docker pull "$img"; then PICKED="$img"; break; else echo "retry $i"; sleep 5; fi
+            done
+            [[ -n "$PICKED" ]] && break
+          done
+          if [[ -z "$PICKED" ]]; then
+            echo "::error::No pude descargar ninguna imagen kindest/node (anónimo)."
+            echo "Sugerencia: reducir retries o cambiar a helm/kind-action."
+            exit 1
+          fi
+          echo "✅ Usando imagen: $PICKED"
+
           cat > kind.yaml <<'YAML'
           kind: Cluster
           apiVersion: kind.x-k8s.io/v1alpha4
@@ -54,25 +69,18 @@ jobs:
             - role: control-plane
           YAML
 
-          # Pre-pull con reintentos (evita fallos intermitentes)
-          for i in 1 2 3; do
-            docker pull "$KIND_NODE_IMAGE" && break || { echo "retry $i"; sleep 5; }
-          done
-
-          kind create cluster --name sre-mttr --config kind.yaml --image "$KIND_NODE_IMAGE"
-
+          kind create cluster --name sre-mttr --config kind.yaml --image "$PICKED"
           kind get kubeconfig --name sre-mttr > "$KUBECONFIG"
           chmod 600 "$KUBECONFIG"
           kubectl config use-context kind-sre-mttr
 
-          # Esperas rápidas
           for i in {1..30}; do
             if kubectl version --short >/dev/null 2>&1; then break; fi
-            echo "⏳ Esperando API server..."
-            sleep 2
+            echo "⏳ Esperando API server..."; sleep 2
           done
           kubectl get nodes -o wide
           kubectl wait --for=condition=Ready nodes --all --timeout=180s
+
 
       - name: Namespaces
         run: |
