@@ -169,27 +169,33 @@ jobs:
         env:
           GRAFANA_URL: https://ricardops2211.grafana.net
           GC_GRAFANA_API_TOKEN: ${{ secrets.GC_GRAFANA_API_TOKEN }}
-          # ⚠️ Usa el NOMBRE EXACTO de tu datasource Loki en Grafana (Connections → Data sources)
+          # 👈 Usa el NOMBRE EXACTO de tu datasource Loki en Grafana
           LOKI_DS_NAME: grafanacloud-ricardops2211-logs
         run: |
           set -euo pipefail
-          # 1) intenta por /name/<name>
+
+          # 1) Intentar buscar por nombre directo
           JSON=$(curl -sS -H "Authorization: Bearer ${GC_GRAFANA_API_TOKEN}" \
             "${GRAFANA_URL}/api/datasources/name/${LOKI_DS_NAME}" || true)
-          UID=$(echo "$JSON" | jq -r '.uid // empty')
-          if [[ -z "$UID" || "$UID" == "null" ]]; then
-            # 2) fallback: lista todos y busca por nombre
+          LOKI_UID=$(echo "$JSON" | jq -r '.uid // empty')
+
+          # 2) Fallback: listar todos y filtrar por nombre
+          if [[ -z "$LOKI_UID" ]]; then
             JSON=$(curl -sS -H "Authorization: Bearer ${GC_GRAFANA_API_TOKEN}" \
               "${GRAFANA_URL}/api/datasources")
-            UID=$(echo "$JSON" | jq -r --arg NAME "$LOKI_DS_NAME" '.[] | select(.type=="loki" and .name==$NAME) | .uid' | head -n1)
+            LOKI_UID=$(echo "$JSON" | jq -r --arg NAME "$LOKI_DS_NAME" '.[] | select(.type=="loki" and .name==$NAME) | .uid' | head -n1)
           fi
-          if [[ -z "$UID" ]]; then
-            echo "::error::No encontré el UID del datasource Loki con nombre: ${LOKI_DS_NAME}"
-            echo "$JSON" | jq -r '.[]? | select(.type=="loki") | "\(.name) uid=\(.uid)"' || true
+
+          if [[ -z "$LOKI_UID" ]]; then
+            echo "::error::No encontré UID para el datasource Loki: ${LOKI_DS_NAME}"
+            echo "Disponibles:"
+            echo "$JSON" | jq -r '.[]? | select(.type=="loki") | "\(.name)  uid=\(.uid)"' || true
             exit 1
           fi
-          echo "UID=$UID"
-          echo "uid=$UID" >> "$GITHUB_OUTPUT"
+
+          echo "LOKI_UID=$LOKI_UID"
+          echo "loki_uid=$LOKI_UID" >> "$GITHUB_OUTPUT"
+
 
 
       - name: Diagnosticar y auto-arreglar dashboard
@@ -275,7 +281,7 @@ jobs:
           DASHBOARD_JSON: dashboards/mttr_grafana.json
           DASHBOARD_UID: sre-mttr-lab
           DASHBOARD_TITLE: "SRE MTTR Lab"
-          LOKI_DS_UID: ${{ steps.loki_ds.outputs.uid }}     # 👈 forzado por UID
+          LOKI_DS_UID: ${{ steps.loki_ds.outputs.loki_uid }}     # 👈 forzado por UID
         run: |
           python3 scripts/provision_dashboard.py
 
@@ -286,7 +292,7 @@ jobs:
           GC_GRAFANA_API_TOKEN: ${{ secrets.GC_GRAFANA_API_TOKEN }}
           DASHBOARD_UID: "sre-mttr-lab"
           DASHBOARD_TITLE: "SRE MTTR Lab"
-          LOKI_DS_UID: ${{ steps.loki_ds.outputs.uid }}     # 👈 forzado por UID
+          LOKI_DS_UID: ${{ steps.loki_ds.outputs.loki_uid }}     # 👈 forzado por UID
           LABEL_APP: podinfo
           LABEL_ENV: ci
           DEFAULT_FROM: now-24h
