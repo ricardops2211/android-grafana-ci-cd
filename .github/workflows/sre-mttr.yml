@@ -140,7 +140,7 @@ jobs:
           scripts/query_last_mttr.sh
 
 
-      - name: Publicar MTTR en Loki Cloud (payload seguro con jq)
+      - name: Publicar MTTR en Loki Cloud (robusto)
         shell: bash
         env:
           GC_LOKI_URL: ${{ secrets.GC_LOKI_URL }}
@@ -148,17 +148,79 @@ jobs:
           GC_LOKI_PASSWORD: ${{ secrets.GC_LOKI_PASSWORD }}
         run: |
           set -euo pipefail
+
+          # Trae outputs del step 'mttr' si existen
           MTTR_SEC="${{ steps.mttr.outputs.mttr_sec }}"
-          TS_NS="$(date +%s%N)"
-          LINE=$(jq -c -n --argjson mttr "$MTTR_SEC" '{mttr_seconds:$mttr, message:"MTTR (kind→Grafana Cloud)", incidents_resolved:1}')
-          PAYLOAD=$(jq -nc --arg ts "$TS_NS" --arg line "$LINE" '{streams:[{stream:{app:"podinfo",metric:"mttr"},values:[[ $ts, $line ]]}]}')
-          RESP=$(curl -sS -w "\n%{http_code}" -u "${GC_LOKI_USERNAME}:${GC_LOKI_PASSWORD}" -H "Content-Type: application/json" -X POST "${GC_LOKI_URL}" --data-raw "$PAYLOAD")
-          BODY=$(echo "$RESP" | head -n-1); CODE=$(echo "$RESP" | tail -n1)
-          echo "HTTP_CODE=$CODE"; [[ -n "$BODY" ]] && echo "RESP_BODY=$BODY"
-          if [[ "$CODE" != "204" && "$CODE" != "200" ]]; then
-            echo "::error::Push a Loki falló (HTTP $CODE)"; echo "$BODY"; exit 1
+          START_MS="${{ steps.mttr.outputs.start_ms }}"
+          END_MS="${{ steps.mttr.outputs.end_ms }}"
+
+          # Fallbacks seguros si vienen vacíos (evita --argjson)
+          if [[ -z "${MTTR_SEC}" ]]; then
+            echo "::warning::mttr_sec vacío; usando 60s como fallback"
+            MTTR_SEC="60"
           fi
+          if [[ -z "${START_MS}" || -z "${END_MS}" ]]; then
+            echo "::warning::start_ms/end_ms vacíos; usando última 1 min como fallback"
+            END_MS=$(date +%s%3N)
+            START_MS=$((END_MS-60000))
+          fi
+
+          TS_NS="$(date +%s%N)"   # ts en nanosegundos (string)
+
+          # Construye el cuerpo del log como STRING (no objeto), usando --arg y tonumber
+          LINE=$(jq -c -n \
+            --arg mttr "$MTTR_SEC" \
+            --arg start_ms "$START_MS" \
+            --arg end_ms "$END_MS" \
+            --arg id "inc-$(date +%s)" \
+            --arg app "podinfo" \
+            --arg env "ci" \
+            --arg sev "sev2" \
+            --arg msg "MTTR (kind→Grafana Cloud)" '
+            {
+              incident_id: $id,
+              app: $app,
+              env: $env,
+              severity: $sev,
+              mttr_seconds: ($mttr | tonumber),
+              start_ms: ($start_ms | tonumber),
+              end_ms: ($end_ms | tonumber),
+              restored: true,
+              message: $msg
+            }')
+
+          # Construye el payload completo
+          PAYLOAD=$(jq -nc \
+            --arg ts "$TS_NS" \
+            --arg line "$LINE" '
+            {
+              streams: [
+                {
+                  stream: { metric:"mttr", app:"podinfo", env:"ci", severity:"sev2" },
+                  values: [[ $ts, $line ]]
+                }
+              ]
+            }')
+
+          # Enviar
+          RESP=$(curl -sS -w "\n%{http_code}" \
+            -u "${GC_LOKI_USERNAME}:${GC_LOKI_PASSWORD}" \
+            -H "Content-Type: application/json" \
+            -X POST "${GC_LOKI_URL}" \
+            --data-raw "$PAYLOAD")
+
+          BODY=$(echo "$RESP" | head -n-1)
+          CODE=$(echo "$RESP" | tail -n1)
+          echo "HTTP_CODE=$CODE"
+          [[ -n "$BODY" ]] && echo "RESP_BODY=$BODY"
+
+          if [[ "$CODE" != "204" && "$CODE" != "200" ]]; then
+            echo "::error::Push a Loki falló (HTTP $CODE)"
+            exit 1
+          fi
+
           echo "✅ MTTR publicado en Loki."
+
 
       - name: Descubrir UID real del datasource Loki por nombre
         id: loki_ds
