@@ -1,4 +1,4 @@
-name: SRE-MTTR-Lab-Richie
+name: SRE-MTTR-Lab
 
 on:
   push:
