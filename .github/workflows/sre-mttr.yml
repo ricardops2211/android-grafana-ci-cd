@@ -126,22 +126,19 @@ jobs:
           kubectl -n demo-app rollout status deploy/podinfo --timeout=5m
 
       - name: Inyectar incidente y medir MTTR
-        id: mttr
-        shell: bash
         run: |
-          set -euo pipefail
-          NS="demo-app"; DEPLOY="podinfo"
-          START=$(date +%s)
-          kubectl -n "$NS" scale deploy "$DEPLOY" --replicas=0
-          sleep 90
-          kubectl -n "$NS" scale deploy "$DEPLOY" --replicas=2
-          kubectl -n "$NS" rollout status deploy/"$DEPLOY" --timeout=5m
-          END=$(date +%s)
-          MTTR_SEC=$((END-START)); (( MTTR_SEC<0 )) && MTTR_SEC=0
-          START_MS=$((START*1000)); END_MS=$((END*1000))
-          echo "mttr_sec=${MTTR_SEC}" >> "$GITHUB_OUTPUT"
-          echo "start_ms=${START_MS}" >> "$GITHUB_OUTPUT"
-          echo "end_ms=${END_MS}"     >> "$GITHUB_OUTPUT"
+          chmod +x scripts/incident_inject.sh
+          scripts/incident_inject.sh
+
+      - name: Diagnóstico – último MTTR en Loki
+        env:
+          GC_LOKI_URL: ${{ secrets.GC_LOKI_URL }}
+          GC_LOKI_USERNAME: ${{ secrets.GC_LOKI_USERNAME }}
+          GC_LOKI_PASSWORD: ${{ secrets.GC_LOKI_PASSWORD }}
+        run: |
+          chmod +x scripts/query_last_mttr.sh
+          scripts/query_last_mttr.sh
+
 
       - name: Publicar MTTR en Loki Cloud (payload seguro con jq)
         shell: bash
