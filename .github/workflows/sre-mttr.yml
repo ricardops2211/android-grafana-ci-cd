@@ -1,4 +1,4 @@
-name: Incidentes-MTTR-Grafana
+name: Incidentes-MTTR-Grafana-V1
 
 on:
   push: { branches: ["reusable-sre-richie"] }
