@@ -1,0 +1,71 @@
+name: gha_grafana
+on:
+  workflow_call:
+    inputs:
+      grafana_url:     { required: true, type: string }
+      loki_ds_name:    { required: true, type: string }
+      dashboard_uid:   { required: true, type: string }
+      dashboard_title: { required: true, type: string }
+    secrets:
+      GC_GRAFANA_API_TOKEN: { required: true }
+
+jobs:
+  grafana:
+    runs-on: ubuntu-latest
+    env:
+      GRAFANA_URL:      ${{ inputs.grafana_url }}
+      LOKI_DS_NAME:     ${{ inputs.loki_ds_name }}
+      DASHBOARD_UID:    ${{ inputs.dashboard_uid }}
+      DASHBOARD_TITLE:  ${{ inputs.dashboard_title }}
+      GC_GRAFANA_API_TOKEN: ${{ secrets.GC_GRAFANA_API_TOKEN }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Descubrir UID del datasource Loki
+        id: loki_ds
+        run: |
+          set -euo pipefail
+          JSON=$(curl -sS -H "Authorization: Bearer ${GC_GRAFANA_API_TOKEN}" \
+            "${GRAFANA_URL}/api/datasources/name/${LOKI_DS_NAME}" || true)
+          LOKI_UID=$(echo "$JSON" | jq -r '.uid // empty')
+          if [[ -z "$LOKI_UID" ]]; then
+            JSON=$(curl -sS -H "Authorization: Bearer ${GC_GRAFANA_API_TOKEN}" \
+              "${GRAFANA_URL}/api/datasources")
+            LOKI_UID=$(echo "$JSON" | jq -r --arg NAME "$LOKI_DS_NAME" '.[] | select(.type=="loki" and .name==$NAME) | .uid' | head -n1)
+          fi
+          [[ -z "$LOKI_UID" ]] && { echo "::error::No Loki UID"; exit 1; }
+          echo "loki_uid=$LOKI_UID" >> "$GITHUB_OUTPUT"
+
+      - name: Provisionar dashboard
+        env:
+          LOKI_DS_UID: ${{ steps.loki_ds.outputs.loki_uid }}
+          DASHBOARD_JSON: dashboards/mttr_grafana.json
+        run: |
+          python3 scripts/provision_dashboard.py
+
+      - name: Ajustar dashboard (datasource + queries + rango)
+        env:
+          LOKI_DS_UID: ${{ steps.loki_ds.outputs.loki_uid }}
+          LABEL_APP: podinfo
+          LABEL_ENV: ci
+          DEFAULT_FROM: now-24h
+          DEFAULT_TO: now
+        run: |
+          python3 scripts/adjust_dashboard.py
+
+      - name: (Opcional) Crear anotación con la última medida
+        env:
+          MTTR_JSON: /tmp/mttr.json
+        run: |
+          if [[ -f "$MTTR_JSON" ]]; then
+            MTTR_SEC=$(jq -r .mttr_sec "$MTTR_JSON")
+            START_MS=$(jq -r .start_ms "$MTTR_JSON")
+            END_MS=$(jq -r .end_ms "$MTTR_JSON")
+            PAYLOAD=$(jq -nc --argjson t "$START_MS" --argjson te "$END_MS" \
+              --arg txt "MTTR demo: ${MTTR_SEC}s" \
+              '{time:$t,timeEnd:$te,text:$txt,tags:["mttr","sre","podinfo"]}')
+            curl -sS -H "Authorization: Bearer ${GC_GRAFANA_API_TOKEN}" \
+              -H "Content-Type: application/json" \
+              -X POST "${GRAFANA_URL}/api/annotations" \
+              --data "$PAYLOAD" >/dev/null || true
+          fi
