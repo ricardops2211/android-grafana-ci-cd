@@ -71,8 +71,16 @@ jobs:
           helm repo add prometheus-community https://prometheus-community.github.io/helm-charts
           helm repo update
 
+      - name: Ensure namespaces exist
+        run: |
+          set -euo pipefail
+          kubectl get ns monitoring >/dev/null 2>&1 || kubectl create ns monitoring
+          kubectl get ns demo-app   >/dev/null 2>&1 || kubectl create ns demo-app
+
+
       - name: Secret Grafana Cloud (Prometheus)
         run: |
+          set -euo pipefail
           kubectl -n monitoring create secret generic grafana-cloud-metrics \
             --from-literal=username="${GC_PROM_USERNAME}" \
             --from-literal=password="${GC_PROM_PASSWORD}" \
