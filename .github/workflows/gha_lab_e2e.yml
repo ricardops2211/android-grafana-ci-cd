@@ -1,0 +1,146 @@
+name: gha_lab_e2e
+on:
+  workflow_call:
+    inputs:
+      grafana_url:     { required: true, type: string }
+      loki_ds_name:    { required: true, type: string }
+      dashboard_uid:   { required: true, type: string }
+      dashboard_title: { required: true, type: string }
+    secrets:
+      GC_PROM_URL:       { required: true }
+      GC_PROM_USERNAME:  { required: true }
+      GC_PROM_PASSWORD:  { required: true }
+      GC_LOKI_URL:       { required: true }
+      GC_LOKI_USERNAME:  { required: true }
+      GC_LOKI_PASSWORD:  { required: true }
+      GC_GRAFANA_API_TOKEN: { required: true }
+
+jobs:
+  lab:
+    runs-on: ubuntu-latest
+    env:
+      KUBECONFIG: ${{ github.workspace }}/kubeconfig
+      GC_PROM_URL:       ${{ secrets.GC_PROM_URL }}
+      GC_PROM_USERNAME:  ${{ secrets.GC_PROM_USERNAME }}
+      GC_PROM_PASSWORD:  ${{ secrets.GC_PROM_PASSWORD }}
+      GC_LOKI_URL:       ${{ secrets.GC_LOKI_URL }}
+      GC_LOKI_USERNAME:  ${{ secrets.GC_LOKI_USERNAME }}
+      GC_LOKI_PASSWORD:  ${{ secrets.GC_LOKI_PASSWORD }}
+      GRAFANA_URL:       ${{ inputs.grafana_url }}
+      LOKI_DS_NAME:      ${{ inputs.loki_ds_name }}
+      DASHBOARD_UID:     ${{ inputs.dashboard_uid }}
+      DASHBOARD_TITLE:   ${{ inputs.dashboard_title }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install tools
+        run: |
+          set -e
+          sudo apt-get update -y
+          sudo apt-get install -y jq curl ca-certificates gnupg gettext-base
+          curl -Lo kubectl https://storage.googleapis.com/kubernetes-release/release/$(curl -s https://storage.googleapis.com/kubernetes-release/release/stable.txt)/bin/linux/amd64/kubectl
+          chmod +x kubectl && sudo mv kubectl /usr/local/bin/
+          curl -Lo kind https://kind.sigs.k8s.io/dl/v0.23.0/kind-linux-amd64
+          chmod +x kind && sudo mv kind /usr/local/bin/
+          curl -fsSL https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 | bash
+
+      - name: Login GHCR
+        run: echo "${{ github.token }}" | docker login ghcr.io -u ${{ github.actor }} --password-stdin
+
+      - name: Create kind cluster (same runner)
+        env:
+          KIND_NODE_CANDIDATES: "kindest/node:v1.29.2 kindest/node:v1.28.0 kindest/node:v1.30.0"
+        run: |
+          set -e
+          PICK=""
+          for img in $KIND_NODE_CANDIDATES; do
+            for i in 1 2 3; do docker pull "$img" && { PICK="$img"; break; } || sleep 5; done
+            [[ -n "$PICK" ]] && break
+          done
+          [[ -z "$PICK" ]] && { echo "::error::No node image"; exit 1; }
+          cat > kind.yaml <<'YAML'
+          kind: Cluster
+          apiVersion: kind.x-k8s.io/v1alpha4
+          nodes: [ { role: control-plane } ]
+          YAML
+          kind create cluster --name sre-mttr --config kind.yaml --image "$PICK"
+          kind get kubeconfig --name sre-mttr > "$KUBECONFIG"
+          chmod 600 "$KUBECONFIG"
+          kubectl wait --for=condition=Ready nodes --all --timeout=180s
+
+      - name: Namespaces
+        run: |
+          kubectl create ns monitoring || true
+          kubectl create ns demo-app || true
+
+      - name: Helm repos
+        run: |
+          helm repo add grafana https://grafana.github.io/helm-charts
+          helm repo add prometheus-community https://prometheus-community.github.io/helm-charts
+          helm repo update
+
+      - name: Secret Grafana Cloud (Prometheus)
+        run: |
+          kubectl -n monitoring create secret generic grafana-cloud-metrics \
+            --from-literal=username="${GC_PROM_USERNAME}" \
+            --from-literal=password="${GC_PROM_PASSWORD}" \
+            --dry-run=client -o yaml | kubectl apply -f -
+
+      - name: kube-prometheus-stack (remote_write)
+        run: |
+          envsubst < infra/helm/values-prom.yaml > /tmp/values-prom.yaml
+          helm upgrade --install monitoring prometheus-community/kube-prometheus-stack \
+            -n monitoring -f /tmp/values-prom.yaml --wait --timeout 20m
+
+      - name: Promtail → Loki Cloud
+        run: |
+          envsubst < infra/helm/values-loki.yaml > /tmp/values-loki.yaml
+          helm upgrade --install loki grafana/loki-stack \
+            -n monitoring -f /tmp/values-loki.yaml --set loki.enabled=false \
+            --wait --timeout 15m
+
+      - name: App y alerts
+        run: |
+          kubectl apply -f k8s/app/podinfo.yaml
+          kubectl apply -f k8s/alerts/mttr-recording-rules.yaml
+          kubectl -n demo-app rollout status deploy/podinfo --timeout=5m
+
+      - name: Inyectar incidente + publicar MTTR
+        run: |
+          chmod +x scripts/incident_inject.sh scripts/publish_mttr.sh
+          scripts/incident_inject.sh
+          scripts/publish_mttr.sh
+
+      - name: Descubrir UID de Loki
+        id: loki_ds
+        env:
+          GC_GRAFANA_API_TOKEN: ${{ secrets.GC_GRAFANA_API_TOKEN }}
+        run: |
+          set -euo pipefail
+          JSON=$(curl -sS -H "Authorization: Bearer ${GC_GRAFANA_API_TOKEN}" \
+            "${GRAFANA_URL}/api/datasources/name/${LOKI_DS_NAME}" || true)
+          LOKI_UID=$(echo "$JSON" | jq -r '.uid // empty')
+          if [[ -z "$LOKI_UID" ]]; then
+            JSON=$(curl -sS -H "Authorization: Bearer ${GC_GRAFANA_API_TOKEN}" \
+              "${GRAFANA_URL}/api/datasources")
+            LOKI_UID=$(echo "$JSON" | jq -r --arg NAME "$LOKI_DS_NAME" '.[] | select(.type=="loki" and .name==$NAME) | .uid' | head -n1)
+          fi
+          [[ -z "$LOKI_UID" ]] && { echo "::error::No Loki UID"; exit 1; }
+          echo "loki_uid=$LOKI_UID" >> "$GITHUB_OUTPUT"
+
+      - name: Provisionar dashboard
+        env:
+          GC_GRAFANA_API_TOKEN: ${{ secrets.GC_GRAFANA_API_TOKEN }}
+          LOKI_DS_UID: ${{ steps.loki_ds.outputs.loki_uid }}
+          DASHBOARD_JSON: dashboards/mttr_grafana.json
+        run: python3 scripts/provision_dashboard.py
+
+      - name: Ajustar dashboard
+        env:
+          GC_GRAFANA_API_TOKEN: ${{ secrets.GC_GRAFANA_API_TOKEN }}
+          LOKI_DS_UID: ${{ steps.loki_ds.outputs.loki_uid }}
+          LABEL_APP: podinfo
+          LABEL_ENV: ci
+          DEFAULT_FROM: now-24h
+          DEFAULT_TO: now
+        run: python3 scripts/adjust_dashboard.py
