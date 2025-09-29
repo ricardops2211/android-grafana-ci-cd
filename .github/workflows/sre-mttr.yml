@@ -1,6 +1,6 @@
-name: Manejo de incidentes bajo MTTR en Grafana
+name: Incidentes-MTTR-Grafana
 on:
-  push: { branches: ["quitar-reusable-sre-richie"] }
+  push: { branches: ["reusable-sre-richie"] }
   workflow_dispatch: {}
 
 jobs:
