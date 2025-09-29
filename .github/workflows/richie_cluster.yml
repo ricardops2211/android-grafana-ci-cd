@@ -1,4 +1,4 @@
-name: rw_cluster
+name: richie_cluster
 on:
   workflow_call: {}
 
