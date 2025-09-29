@@ -6,6 +6,10 @@ on:
       loki_ds_name:    { required: true, type: string }
       dashboard_uid:   { required: true, type: string }
       dashboard_title: { required: true, type: string }
+      # 👇 opcionales: pásalos desde el caller si quieres anotar el MTTR real
+      mttr_sec:        { required: false, type: string }
+      start_ms:        { required: false, type: string }
+      end_ms:          { required: false, type: string }
     secrets:
       GC_GRAFANA_API_TOKEN: { required: true }
 
@@ -40,8 +44,7 @@ jobs:
         env:
           LOKI_DS_UID: ${{ steps.loki_ds.outputs.loki_uid }}
           DASHBOARD_JSON: dashboards/mttr_grafana.json
-        run: |
-          python3 scripts/provision_dashboard.py
+        run: python3 scripts/provision_dashboard.py
 
       - name: Ajustar dashboard (datasource + queries + rango)
         env:
@@ -50,22 +53,49 @@ jobs:
           LABEL_ENV: ci
           DEFAULT_FROM: now-24h
           DEFAULT_TO: now
-        run: |
-          python3 scripts/adjust_dashboard.py
+        run: python3 scripts/adjust_dashboard.py
 
-      - name: (Opcional) Crear anotación con la última medida
+      # ✅ Anotación usando inputs si están presentes; si no, intenta /tmp/mttr.json
+      - name: Crear anotación con la última medida (inputs o fallback a archivo)
+        shell: bash
         env:
           MTTR_JSON: /tmp/mttr.json
+          IN_MTTR:   ${{ inputs.mttr_sec }}
+          IN_START:  ${{ inputs.start_ms }}
+          IN_END:    ${{ inputs.end_ms }}
         run: |
-          if [[ -f "$MTTR_JSON" ]]; then
-            MTTR_SEC=$(jq -r .mttr_sec "$MTTR_JSON")
-            START_MS=$(jq -r .start_ms "$MTTR_JSON")
-            END_MS=$(jq -r .end_ms "$MTTR_JSON")
-            PAYLOAD=$(jq -nc --argjson t "$START_MS" --argjson te "$END_MS" \
-              --arg txt "MTTR demo: ${MTTR_SEC}s" \
-              '{time:$t,timeEnd:$te,text:$txt,tags:["mttr","sre","podinfo"]}')
-            curl -sS -H "Authorization: Bearer ${GC_GRAFANA_API_TOKEN}" \
-              -H "Content-Type: application/json" \
-              -X POST "${GRAFANA_URL}/api/annotations" \
-              --data "$PAYLOAD" >/dev/null || true
+          set -euo pipefail
+          MTTR_SEC="${IN_MTTR:-}"
+          START_MS="${IN_START:-}"
+          END_MS="${IN_END:-}"
+
+          if [[ -z "${MTTR_SEC}" || -z "${START_MS}" || -z "${END_MS}" ]]; then
+            if [[ -s "$MTTR_JSON" ]] && jq -e . "$MTTR_JSON" >/dev/null 2>&1; then
+              MTTR_SEC="${MTTR_SEC:-$(jq -r .mttr_sec "$MTTR_JSON")}"
+              START_MS="${START_MS:-$(jq -r .start_ms "$MTTR_JSON")}"
+              END_MS="${END_MS:-$(jq -r .end_ms "$MTTR_JSON")}"
+            fi
           fi
+
+          # Si aún faltan campos, no falles; sólo omite la anotación.
+          if [[ -z "${MTTR_SEC}" || -z "${START_MS}" || -z "${END_MS}" ]]; then
+            echo "::warning::No hay mttr_sec/start_ms/end_ms para anotar; omitiendo."
+            exit 0
+          fi
+
+          PAYLOAD=$(jq -nc --argjson t "$START_MS" --argjson te "$END_MS" \
+            --arg txt "MTTR demo: ${MTTR_SEC}s" \
+            '{time:$t,timeEnd:$te,text:$txt,tags:["mttr","sre","podinfo"]}')
+
+          RESP=$(curl -sS -w "\n%{http_code}" \
+            -H "Authorization: Bearer ${GC_GRAFANA_API_TOKEN}" \
+            -H "Content-Type: application/json" \
+            -X POST "${GRAFANA_URL}/api/annotations" \
+            --data "$PAYLOAD")
+
+          BODY=$(echo "$RESP" | head -n-1)
+          CODE=$(echo "$RESP" | tail -n1)
+          echo "HTTP_CODE=$CODE"
+          [[ -n "$BODY" ]] && echo "BODY=$BODY"
+          [[ "$CODE" = "200" || "$CODE" = "202" ]] || {
+            echo "::warning::No se pudo crear la anotación (HTTP $CODE)"; exit 0; }
