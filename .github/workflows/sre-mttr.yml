@@ -5,23 +5,23 @@ on:
 
 jobs:
   cluster:
-    uses: ./.github/workflows/rw_cluster.yml
+    uses: ./.github/workflows/richie_cluster.yml
 
   observability:
     needs: [cluster]
-    uses: ./.github/workflows/rw_observability.yml
+    uses: ./.github/workflows/richie_observability.yml
     with:
       GC_PROM_URL: ${{ secrets.GC_PROM_URL }}
     secrets: inherit   # pasa secrets del repo
 
   incident:
     needs: [observability]
-    uses: ./.github/workflows/rw_incident.yml
+    uses: ./.github/workflows/richie_incident.yml
     secrets: inherit
 
   grafana:
     needs: [incident]
-    uses: ./.github/workflows/rw_grafana.yml
+    uses: ./.github/workflows/richie_grafana.yml
     with:
       grafana_url: https://ricardops2211.grafana.net
       loki_ds_name: grafanacloud-ricardops2211-logs
