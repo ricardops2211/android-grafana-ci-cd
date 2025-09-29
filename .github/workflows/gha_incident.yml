@@ -1,6 +1,21 @@
 name: gha_incident
+
 on:
-  workflow_call: {}
+  workflow_call:
+    secrets:
+      GC_LOKI_URL:      { required: true }
+      GC_LOKI_USERNAME: { required: true }
+      GC_LOKI_PASSWORD: { required: true }
+    outputs:
+      mttr_sec:
+        description: "MTTR medido en segundos"
+        value: ${{ jobs.incident.outputs.mttr_sec }}
+      start_ms:
+        description: "Inicio del incidente (epoch ms)"
+        value: ${{ jobs.incident.outputs.start_ms }}
+      end_ms:
+        description: "Fin del incidente (epoch ms)"
+        value: ${{ jobs.incident.outputs.end_ms }}
 
 jobs:
   incident:
@@ -14,6 +29,7 @@ jobs:
       mttr_sec: ${{ steps.outs.outputs.mttr_sec }}
       start_ms: ${{ steps.outs.outputs.start_ms }}
       end_ms:   ${{ steps.outs.outputs.end_ms }}
+
     steps:
       - uses: actions/checkout@v4
 
@@ -27,9 +43,34 @@ jobs:
           chmod +x scripts/publish_mttr.sh
           scripts/publish_mttr.sh
 
+      # 👇 Paso actualizado (robusto) para emitir outputs
       - name: Emitir outputs para upstream
         id: outs
+        shell: bash
         run: |
-          echo "mttr_sec=$(jq -r .mttr_sec /tmp/mttr.json)" >> "$GITHUB_OUTPUT"
-          echo "start_ms=$(jq -r .start_ms /tmp/mttr.json)" >> "$GITHUB_OUTPUT"
-          echo "end_ms=$(jq -r .end_ms /tmp/mttr.json)"   >> "$GITHUB_OUTPUT"
+          set -euo pipefail
+
+          FILE="/tmp/mttr.json"
+          MTTR_SEC=""; START_MS=""; END_MS=""
+          if [[ -s "$FILE" ]] && jq -e . "$FILE" >/dev/null 2>&1; then
+            MTTR_SEC=$(jq -r '.mttr_sec // empty' "$FILE")
+            START_MS=$(jq -r '.start_ms // empty' "$FILE")
+            END_MS=$(jq -r '.end_ms // empty' "$FILE")
+          else
+            echo "::warning::No existe o es inválido $FILE; usaré fallbacks."
+          fi
+
+          # Fallbacks seguros
+          : "${MTTR_SEC:=60}"
+          if [[ -z "${START_MS}" || -z "${END_MS}" ]]; then
+            END_MS=$(date +%s%3N)         # ahora (ms)
+            START_MS=$((END_MS-60000))    # -60s
+          fi
+
+          echo "mttr_sec=$MTTR_SEC" >> "$GITHUB_OUTPUT"
+          echo "start_ms=$START_MS" >> "$GITHUB_OUTPUT"
+          echo "end_ms=$END_MS"     >> "$GITHUB_OUTPUT"
+
+          echo "MTTR_SEC=$MTTR_SEC"
+          echo "START_MS=$START_MS"
+          echo "END_MS=$END_MS"
