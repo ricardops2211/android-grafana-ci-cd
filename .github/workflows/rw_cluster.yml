@@ -1,0 +1,54 @@
+name: rw_cluster
+on:
+  workflow_call: {}
+
+jobs:
+  setup:
+    runs-on: ubuntu-latest
+    env:
+      KUBECONFIG: ${{ github.workspace }}/kubeconfig
+      KIND_NODE_CANDIDATES: "kindest/node:v1.29.2 kindest/node:v1.28.0 kindest/node:v1.30.0"
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install tools
+        run: |
+          set -e
+          sudo apt-get update -y
+          sudo apt-get install -y jq curl ca-certificates gnupg gettext-base
+          curl -Lo kubectl https://storage.googleapis.com/kubernetes-release/release/$(curl -s https://storage.googleapis.com/kubernetes-release/release/stable.txt)/bin/linux/amd64/kubectl
+          chmod +x kubectl && sudo mv kubectl /usr/local/bin/
+          curl -Lo kind https://kind.sigs.k8s.io/dl/v0.23.0/kind-linux-amd64
+          chmod +x kind && sudo mv kind /usr/local/bin/
+          curl -fsSL https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 | bash
+
+      - name: Login GHCR (avoid rate limit)
+        run: |
+          echo "${{ github.token }}" | docker login ghcr.io -u ${{ github.actor }} --password-stdin
+
+      - name: Create kind cluster (fallback tags)
+        run: |
+          set -e
+          PICK=""
+          for img in $KIND_NODE_CANDIDATES; do
+            for i in 1 2 3; do docker pull "$img" && { PICK="$img"; break; } || sleep 5; done
+            [[ -n "$PICK" ]] && break
+          done
+          [[ -z "$PICK" ]] && { echo "::error::No node image"; exit 1; }
+
+          cat > kind.yaml <<'YAML'
+          kind: Cluster
+          apiVersion: kind.x-k8s.io/v1alpha4
+          nodes:
+            - role: control-plane
+          YAML
+
+          kind create cluster --name sre-mttr --config kind.yaml --image "$PICK"
+          kind get kubeconfig --name sre-mttr > "$KUBECONFIG"
+          chmod 600 "$KUBECONFIG"
+          kubectl wait --for=condition=Ready nodes --all --timeout=180s
+
+      - name: Namespaces
+        run: |
+          kubectl create ns monitoring || true
+          kubectl create ns demo-app || true
