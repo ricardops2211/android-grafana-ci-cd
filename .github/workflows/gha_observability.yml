@@ -3,12 +3,12 @@ name: gha_observability
 on:
   workflow_call:
     secrets:
-      GC_PROM_URL:       { required: true }
-      GC_PROM_USERNAME:  { required: true }
-      GC_PROM_PASSWORD:  { required: true }
-      GC_LOKI_URL:       { required: true }
-      GC_LOKI_USERNAME:  { required: true }
-      GC_LOKI_PASSWORD:  { required: true }
+      GC_PROM_URL:          { required: true }
+      GC_PROM_USERNAME:     { required: true }
+      GC_PROM_PASSWORD:     { required: true }
+      GC_LOKI_URL:          { required: true }
+      GC_LOKI_USERNAME:     { required: true }
+      GC_LOKI_PASSWORD:     { required: true }
 
 jobs:
   obs:
