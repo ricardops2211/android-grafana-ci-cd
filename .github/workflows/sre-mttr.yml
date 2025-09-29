@@ -11,9 +11,15 @@ jobs:
   observability:
     needs: [cluster]
     uses: ./.github/workflows/gha_observability.yml
-    secrets:
-      GC_PROM_URL: ${{ secrets.GC_PROM_URL }} 
-      
+    with:
+      GC_PROM_URL: ${{ secrets.GC_PROM_URL }}   # ✅ input
+    secrets:                                     # ✅ secrets declarados para ese reusable
+      GC_PROM_USERNAME: ${{ secrets.GC_PROM_USERNAME }}
+      GC_PROM_PASSWORD: ${{ secrets.GC_PROM_PASSWORD }}
+      GC_LOKI_URL:       ${{ secrets.GC_LOKI_URL }}
+      GC_LOKI_USERNAME:  ${{ secrets.GC_LOKI_USERNAME }}
+      GC_LOKI_PASSWORD:  ${{ secrets.GC_LOKI_PASSWORD }}
+
   incident:
     needs: [observability]
     uses: ./.github/workflows/gha_incident.yml
