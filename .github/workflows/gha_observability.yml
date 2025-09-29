@@ -14,7 +14,7 @@ jobs:
   obs:
     runs-on: ubuntu-latest
     env:
-      KUBECONFIG:        ${{ github.workspace }}/kubeconfig
+      KUBECONFIG: ${{ github.workspace }}/kubeconfig
       GC_PROM_URL:       ${{ secrets.GC_PROM_URL }}
       GC_PROM_USERNAME:  ${{ secrets.GC_PROM_USERNAME }}
       GC_PROM_PASSWORD:  ${{ secrets.GC_PROM_PASSWORD }}
@@ -24,6 +24,47 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # 1) Herramientas
+      - name: Install tools
+        run: |
+          set -e
+          sudo apt-get update -y
+          sudo apt-get install -y jq curl ca-certificates gnupg gettext-base
+          curl -Lo kubectl https://storage.googleapis.com/kubernetes-release/release/$(curl -s https://storage.googleapis.com/kubernetes-release/release/stable.txt)/bin/linux/amd64/kubectl
+          chmod +x kubectl && sudo mv kubectl /usr/local/bin/
+          curl -Lo kind https://kind.sigs.k8s.io/dl/v0.23.0/kind-linux-amd64
+          chmod +x kind && sudo mv kind /usr/local/bin/
+          curl -fsSL https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 | bash
+
+      # 2) Evitar rate limit al tirar imágenes de ghcr
+      - name: Login GHCR
+        run: echo "${{ github.token }}" | docker login ghcr.io -u ${{ github.actor }} --password-stdin
+
+      # 3) Crear clúster KIND en ESTE job
+      - name: Create kind cluster (local)
+        env:
+          KIND_NODE_CANDIDATES: "kindest/node:v1.29.2 kindest/node:v1.28.0 kindest/node:v1.30.0"
+        run: |
+          set -e
+          PICK=""
+          for img in $KIND_NODE_CANDIDATES; do
+            for i in 1 2 3; do docker pull "$img" && { PICK="$img"; break; } || sleep 5; done
+            [[ -n "$PICK" ]] && break
+          done
+          [[ -z "$PICK" ]] && { echo "::error::No node image"; exit 1; }
+
+          cat > kind.yaml <<'YAML'
+          kind: Cluster
+          apiVersion: kind.x-k8s.io/v1alpha4
+          nodes: [ { role: control-plane } ]
+          YAML
+
+          kind create cluster --name sre-mttr --config kind.yaml --image "$PICK"
+          kind get kubeconfig --name sre-mttr > "$KUBECONFIG"
+          chmod 600 "$KUBECONFIG"
+          kubectl wait --for=condition=Ready nodes --all --timeout=180s
+
+      # 4) (ya tenías) repos Helm, secret, chart, etc…
       - name: Helm repos
         run: |
           helm repo add grafana https://grafana.github.io/helm-charts
@@ -37,18 +78,6 @@ jobs:
             --from-literal=password="${GC_PROM_PASSWORD}" \
             --dry-run=client -o yaml | kubectl apply -f -
 
-      - name: kube-prometheus-stack (remote_write)
-        run: |
-          envsubst < infra/helm/values-prom.yaml > /tmp/values-prom.yaml
-          helm upgrade --install monitoring prometheus-community/kube-prometheus-stack \
-            -n monitoring -f /tmp/values-prom.yaml --wait --timeout 20m
-
-      - name: Promtail → Loki Cloud
-        run: |
-          envsubst < infra/helm/values-loki.yaml > /tmp/values-loki.yaml
-          helm upgrade --install loki grafana/loki-stack \
-            -n monitoring -f /tmp/values-loki.yaml --set loki.enabled=false \
-            --wait --timeout 15m
 
       - name: App y alerts
         run: |
