@@ -1,4 +1,5 @@
 name: Incidentes-MTTR-Grafana
+
 on:
   push: { branches: ["reusable-sre-richie"] }
   workflow_dispatch: {}
@@ -10,10 +11,9 @@ jobs:
   observability:
     needs: [cluster]
     uses: ./.github/workflows/gha_observability.yml
-    with:
-      GC_PROM_URL: ${{ secrets.GC_PROM_URL }}
-    secrets: inherit   # pasa secrets del repo
-
+    secrets:
+      GC_PROM_URL: ${{ secrets.GC_PROM_URL }} 
+      
   incident:
     needs: [observability]
     uses: ./.github/workflows/gha_incident.yml
