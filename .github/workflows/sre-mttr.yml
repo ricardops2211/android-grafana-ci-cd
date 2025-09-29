@@ -1,36 +1,21 @@
 name: Incidentes-MTTR-Grafana-V1
-
 on:
   push: { branches: ["reusable-sre-richie"] }
   workflow_dispatch: {}
 
 jobs:
-  cluster:
-    uses: ./.github/workflows/gha_cluster.yml
-
-  observability:
-    needs: [cluster]
-    uses: ./.github/workflows/gha_observability.yml
-    # ✅ pasa TODO como secrets (no uses `with:` para secretos)
-    secrets:
-      GC_PROM_URL:       ${{ secrets.GC_PROM_URL }}
-      GC_PROM_USERNAME:  ${{ secrets.GC_PROM_USERNAME }}
-      GC_PROM_PASSWORD:  ${{ secrets.GC_PROM_PASSWORD }}
-      GC_LOKI_URL:       ${{ secrets.GC_LOKI_URL }}
-      GC_LOKI_USERNAME:  ${{ secrets.GC_LOKI_USERNAME }}
-      GC_LOKI_PASSWORD:  ${{ secrets.GC_LOKI_PASSWORD }}
-
-  incident:
-    needs: [observability]
-    uses: ./.github/workflows/gha_incident.yml
-    secrets: inherit
-
-  grafana:
-    needs: [incident]
-    uses: ./.github/workflows/gha_grafana.yml
+  lab-e2e:
+    uses: ./.github/workflows/gha_lab_e2e.yml
     with:
       grafana_url: https://ricardops2211.grafana.net
       loki_ds_name: grafanacloud-ricardops2211-logs
       dashboard_uid: sre-mttr-lab
       dashboard_title: "SRE MTTR Lab"
-    secrets: inherit
+    secrets:
+      GC_PROM_URL:          ${{ secrets.GC_PROM_URL }}
+      GC_PROM_USERNAME:     ${{ secrets.GC_PROM_USERNAME }}
+      GC_PROM_PASSWORD:     ${{ secrets.GC_PROM_PASSWORD }}
+      GC_LOKI_URL:          ${{ secrets.GC_LOKI_URL }}
+      GC_LOKI_USERNAME:     ${{ secrets.GC_LOKI_USERNAME }}
+      GC_LOKI_PASSWORD:     ${{ secrets.GC_LOKI_PASSWORD }}
+      GC_GRAFANA_API_TOKEN: ${{ secrets.GC_GRAFANA_API_TOKEN }}
