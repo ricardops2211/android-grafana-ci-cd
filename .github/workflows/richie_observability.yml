@@ -1,0 +1,51 @@
+name: richie_observability
+on:
+  workflow_call:
+    inputs:
+      GC_PROM_URL: { required: true, type: string }
+
+jobs:
+  obs:
+    runs-on: ubuntu-latest
+    env:
+      KUBECONFIG: ${{ github.workspace }}/kubeconfig
+      GC_PROM_URL: ${{ inputs.GC_PROM_URL }}
+      GC_PROM_USERNAME: ${{ secrets.GC_PROM_USERNAME }}
+      GC_PROM_PASSWORD: ${{ secrets.GC_PROM_PASSWORD }}
+      GC_LOKI_URL: ${{ secrets.GC_LOKI_URL }}
+      GC_LOKI_USERNAME: ${{ secrets.GC_LOKI_USERNAME }}
+      GC_LOKI_PASSWORD: ${{ secrets.GC_LOKI_PASSWORD }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Helm repos
+        run: |
+          helm repo add grafana https://grafana.github.io/helm-charts
+          helm repo add prometheus-community https://prometheus-community.github.io/helm-charts
+          helm repo update
+
+      - name: Secret Grafana Cloud (Prometheus)
+        run: |
+          kubectl -n monitoring create secret generic grafana-cloud-metrics \
+            --from-literal=username="${GC_PROM_USERNAME}" \
+            --from-literal=password="${GC_PROM_PASSWORD}" \
+            --dry-run=client -o yaml | kubectl apply -f -
+
+      - name: kube-prometheus-stack (remote_write)
+        run: |
+          envsubst < infra/helm/values-prom.yaml > /tmp/values-prom.yaml
+          helm upgrade --install monitoring prometheus-community/kube-prometheus-stack \
+            -n monitoring -f /tmp/values-prom.yaml --wait --timeout 20m
+
+      - name: Promtail → Loki Cloud
+        run: |
+          envsubst < infra/helm/values-loki.yaml > /tmp/values-loki.yaml
+          helm upgrade --install loki grafana/loki-stack \
+            -n monitoring -f /tmp/values-loki.yaml --set loki.enabled=false \
+            --wait --timeout 15m
+
+      - name: App y alerts
+        run: |
+          kubectl apply -f k8s/app/podinfo.yaml
+          kubectl apply -f k8s/alerts/mttr-recording-rules.yaml
+          kubectl -n demo-app rollout status deploy/podinfo --timeout=5m
