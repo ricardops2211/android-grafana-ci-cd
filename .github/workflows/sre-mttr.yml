@@ -1,6 +1,6 @@
 name: SRE-MTTR-Pipeline
 on:
-  push: { branches: ["reusable-sre-richie-quitar"] }
+  push: { branches: ["quitar-reusable-sre-richie"] }
   workflow_dispatch: {}
 
 jobs:
