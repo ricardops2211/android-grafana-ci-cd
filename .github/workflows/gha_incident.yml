@@ -1,0 +1,35 @@
+name: gha_incident
+on:
+  workflow_call: {}
+
+jobs:
+  incident:
+    runs-on: ubuntu-latest
+    env:
+      KUBECONFIG: ${{ github.workspace }}/kubeconfig
+      GC_LOKI_URL: ${{ secrets.GC_LOKI_URL }}
+      GC_LOKI_USERNAME: ${{ secrets.GC_LOKI_USERNAME }}
+      GC_LOKI_PASSWORD: ${{ secrets.GC_LOKI_PASSWORD }}
+    outputs:
+      mttr_sec: ${{ steps.outs.outputs.mttr_sec }}
+      start_ms: ${{ steps.outs.outputs.start_ms }}
+      end_ms:   ${{ steps.outs.outputs.end_ms }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Inyectar incidente y medir MTTR
+        run: |
+          chmod +x scripts/incident_inject.sh
+          scripts/incident_inject.sh
+
+      - name: Publicar MTTR en Loki (robusto)
+        run: |
+          chmod +x scripts/publish_mttr.sh
+          scripts/publish_mttr.sh
+
+      - name: Emitir outputs para upstream
+        id: outs
+        run: |
+          echo "mttr_sec=$(jq -r .mttr_sec /tmp/mttr.json)" >> "$GITHUB_OUTPUT"
+          echo "start_ms=$(jq -r .start_ms /tmp/mttr.json)" >> "$GITHUB_OUTPUT"
+          echo "end_ms=$(jq -r .end_ms /tmp/mttr.json)"   >> "$GITHUB_OUTPUT"
